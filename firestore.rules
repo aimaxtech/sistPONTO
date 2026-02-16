@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper: Is the user logged in?
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    // Helper: Is the user an admin?
+    function isAdmin() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Profiles Collection
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    
+    // Punches Collection (Point Records)
+    match /punches/{punchId} {
+      // Employees can read their own punches. Admins can read all.
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      
+      // Employees can create punches (self-report). Admins can also manage.
+      allow create: if isSignedIn();
+      
+      // Only admins should edit/delete logs for audit integrity
+      allow update, delete: if isAdmin();
+    }
+    
+    // Justifications Collection
+    match /justifications/{justId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+  }
+}

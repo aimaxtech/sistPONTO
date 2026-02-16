@@ -116,12 +116,12 @@ const EmployeeDashboard = () => {
                                         <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Observações_Técnicas</label>
                                         <textarea className="w-full bg-white/5 border border-white/10 p-3 h-24 focus:border-emerald-500 outline-none font-mono text-xs text-white uppercase resize-none placeholder-gray-600" placeholder="DESCREVA O MOTIVO..."></textarea>
                                     </div>
-                                    <div className="border border-dashed border-white/10 bg-white/2 p-4 text-center text-gray-500 text-[10px] font-black uppercase tracking-widest hover:bg-white/5 cursor-pointer transition-all">
+                                    <div className="border border-dashed border-white/10 bg-white/2 p-4 text-center text-gray-400 text-[10px] font-black uppercase tracking-widest hover:bg-white/5 cursor-pointer transition-all">
                                         📎 ANEXAR_DOCUMENTO_PDF_IMG
                                     </div>
                                 </div>
                                 <div className="flex gap-4 pt-4 border-t border-white/5">
-                                    <button type="button" onClick={() => setShowJustificationModal(false)} className="flex-1 px-4 py-3 border border-white/10 text-gray-500 font-black text-[10px] uppercase tracking-widest hover:text-white hover:border-white/30 transition-all">ABORTAR</button>
+                                    <button type="button" onClick={() => setShowJustificationModal(false)} className="flex-1 px-4 py-3 border border-white/10 text-gray-400 font-black text-[10px] uppercase tracking-widest hover:text-white hover:border-white/30 transition-all">ABORTAR</button>
                                     <button type="submit" className="flex-1 px-4 py-3 bg-emerald-500 text-black font-black text-[10px] uppercase tracking-widest hover:bg-emerald-400 transition-all shadow-lg active:scale-95">ENVIAR_ANALISE</button>
                                 </div>
                             </form>
@@ -143,8 +143,8 @@ const EmployeeDashboard = () => {
                                     </button>
                                 )}
                                 <div>
-                                    <h1 className="text-lg font-black tracking-tighter uppercase italic">
-                                        {view === 'history' ? '📜 Log_Histórico' : '🌱 Módulo_Operativo'}
+                                    <h1 className="text-lg font-black tracking-tighter uppercase italic text-emerald-500">
+                                        {view === 'history' ? '📜 Log_Histórico' : '🌱 Sistema de Ponto'}
                                     </h1>
                                     <p className="text-[10px] font-mono text-gray-400 uppercase tracking-widest">
                                         {view === 'history' ? 'Rastreamento_Arquivado' : `OP: ${currentUser?.name || 'FUNCIONÁRIO'}`}
@@ -175,7 +175,7 @@ const EmployeeDashboard = () => {
                                     <div className="absolute top-0 right-0 p-1 opacity-10 group-hover:opacity-20 transition-opacity">
                                         <svg className="w-10 h-10 text-emerald-500" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" /></svg>
                                     </div>
-                                    <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Hora_Atual</h2>
+                                    <h2 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Hora_Atual</h2>
                                     <p className="text-2xl font-black text-white tracking-tighter">
                                         {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                                     </p>
@@ -184,7 +184,7 @@ const EmployeeDashboard = () => {
                                     <div className="absolute top-0 right-0 p-1 opacity-10 group-hover:opacity-20 transition-opacity">
                                         <svg className="w-10 h-10 text-emerald-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" /></svg>
                                     </div>
-                                    <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Banco_Saldo</h2>
+                                    <h2 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Banco_Saldo</h2>
                                     <p className="text-2xl font-black text-emerald-500 tracking-tighter italic">+02:15</p>
                                 </div>
                             </div>
@@ -202,7 +202,7 @@ const EmployeeDashboard = () => {
                                 >
                                     <p className="text-2xl mb-2 group-hover:scale-110 transition-transform">📜</p>
                                     <p className="text-xs font-black text-white uppercase leading-none tracking-tight">Logs Históricos</p>
-                                    <p className="text-[10px] text-gray-500 mt-2 font-mono uppercase tracking-widest">Acessar_DB</p>
+                                    <p className="text-[10px] text-gray-400 mt-2 font-mono uppercase tracking-widest">Acessar_DB</p>
                                 </button>
                                 <button
                                     onClick={() => setShowJustificationModal(true)}
@@ -210,7 +210,7 @@ const EmployeeDashboard = () => {
                                 >
                                     <p className="text-2xl mb-2 group-hover:scale-110 transition-transform">📝</p>
                                     <p className="text-xs font-black text-white uppercase leading-none tracking-tight">Justificar</p>
-                                    <p className="text-[10px] text-gray-500 mt-2 font-mono uppercase tracking-widest">Abrir_Chamado</p>
+                                    <p className="text-[10px] text-gray-400 mt-2 font-mono uppercase tracking-widest">Abrir_Chamado</p>
                                 </button>
                             </div>
 
@@ -221,7 +221,7 @@ const EmployeeDashboard = () => {
                                     <span className="text-[10px] opacity-50 uppercase">Today_Audit</span>
                                 </div>
                                 <div className="p-0 divide-y divide-white/5">
-                                    <div className="text-center py-12 text-gray-500 bg-white/2">
+                                    <div className="text-center py-12 text-gray-400 bg-white/2">
                                         <p className="text-4xl mb-3 opacity-10">🌑</p>
                                         <p className="text-[10px] font-black uppercase tracking-[0.3em] italic">Aguardando_Primeiro_Ponto</p>
                                     </div>
@@ -260,20 +260,20 @@ const EmployeeDashboard = () => {
                                     <div key={date} className="bg-black/40 backdrop-blur-xl border border-white/5 overflow-hidden shadow-2xl">
                                         <div className="bg-white/5 px-4 py-2 border-b border-white/5 flex justify-between items-center">
                                             <span className="text-[10px] font-mono text-emerald-500 font-black">{date}</span>
-                                            <span className="text-[9px] font-mono text-gray-500 uppercase">Jornada: 08:00h</span>
+                                            <span className="text-[9px] font-mono text-gray-400 uppercase">Jornada: 08:00h</span>
                                         </div>
                                         <div className="p-4 space-y-4">
                                             {historyData.filter(d => d.date === date).map((record, index) => (
                                                 <div key={index} className="flex justify-between items-center group">
                                                     <div className="flex items-center gap-3">
                                                         <div className={`w-1.5 h-1.5 rounded-full ${record.type === 'entrada' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' :
-                                                                record.type.includes('saida') ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' : 'bg-yellow-500'
+                                                            record.type.includes('saida') ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' : 'bg-yellow-500'
                                                             }`}></div>
                                                         <div>
                                                             <p className="text-[10px] font-black text-white uppercase tracking-tighter">
                                                                 {record.type.replace('_', ' ')}
                                                             </p>
-                                                            <p className="text-[8px] font-mono text-gray-500 mt-0.5">{record.location.toUpperCase()}</p>
+                                                            <p className="text-[8px] font-mono text-gray-400 mt-0.5">{record.location.toUpperCase()}</p>
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-4">

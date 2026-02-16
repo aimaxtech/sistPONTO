@@ -1,13 +1,12 @@
-// Firebase Configuration
-// IMPORTANTE: Substitua com suas credenciais do Firebase Console
+// Firebase Configuration - Credenciais carregadas via variáveis de ambiente (.env)
 export const firebaseConfig = {
-    apiKey: "AIzaSyDeJMig3nv638VW9JrpcH6I27LIq8ilQOk",
-    authDomain: "sisponto-c9905.firebaseapp.com",
-    projectId: "sisponto-c9905",
-    storageBucket: "sisponto-c9905.firebasestorage.app",
-    messagingSenderId: "456198943472",
-    appId: "1:456198943472:web:c03a1d0cb2dc447beb0835",
-    measurementId: "G-RB48Z0ZPM6"
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 // Coordenadas da Estufa de Mudas (Exemplo - AJUSTAR COM LOCALIZAÇÃO REAL)

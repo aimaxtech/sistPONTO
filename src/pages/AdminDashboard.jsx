@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
-import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
+import { collection, getDocs, query, where, orderBy, limit, doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import InstallButton from '../components/InstallButton';
 import { GREENHOUSE_LOCATION } from '../config/firebase';
@@ -26,6 +26,13 @@ const AdminDashboard = () => {
     const [reportData, setReportData] = useState([]);
     const [isGeneratingReport, setIsGeneratingReport] = useState(false);
     const [previewPhoto, setPreviewPhoto] = useState(null);
+    const [geofence, setGeofence] = useState({
+        latitude: GREENHOUSE_LOCATION.latitude,
+        longitude: GREENHOUSE_LOCATION.longitude,
+        radius: GREENHOUSE_LOCATION.radius,
+        loading: true
+    });
+    const [isSavingSettings, setIsSavingSettings] = useState(false);
 
     const calculateDistance = (lat1, lon1, lat2, lon2) => {
         const R = 6371e3; // metres
@@ -45,6 +52,14 @@ const AdminDashboard = () => {
     useEffect(() => {
         const fetchDashboardData = async () => {
             try {
+                // Fetch Geofence Settings
+                const geoDoc = await getDoc(doc(db, 'settings', 'geofence'));
+                if (geoDoc.exists()) {
+                    setGeofence({ ...geoDoc.data(), loading: false });
+                } else {
+                    setGeofence(prev => ({ ...prev, loading: false }));
+                }
+
                 // Fetch Employees
                 const empSnapshot = await getDocs(collection(db, 'users'));
                 const empList = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -182,8 +197,8 @@ const AdminDashboard = () => {
             const dist = log.location ? Math.round(calculateDistance(
                 log.location.latitude,
                 log.location.longitude,
-                GREENHOUSE_LOCATION.latitude,
-                GREENHOUSE_LOCATION.longitude
+                geofence.latitude,
+                geofence.longitude
             )) : '';
 
             return [
@@ -360,7 +375,7 @@ const AdminDashboard = () => {
                                     </div>
                                 </div>
                                 <div className="flex gap-4 pt-4 border-t border-white/5">
-                                    <button type="button" onClick={() => setShowRegisterModal(false)} className="flex-1 px-4 py-3 border border-white/10 text-gray-500 font-black text-[10px] uppercase tracking-widest hover:text-white hover:border-white/30 transition-all">ABORTAR</button>
+                                    <button type="button" onClick={() => setShowRegisterModal(false)} className="flex-1 px-4 py-3 border border-white/10 text-gray-400 font-black text-[10px] uppercase tracking-widest hover:text-white hover:border-white/30 transition-all">ABORTAR</button>
                                     <button type="submit" className="flex-1 px-4 py-3 bg-emerald-500 text-black font-black text-[10px] uppercase tracking-widest hover:bg-emerald-400 transition-all shadow-lg active:scale-95">CONFIRMAR_REGISTRO</button>
                                 </div>
                             </form>
@@ -395,7 +410,7 @@ const AdminDashboard = () => {
                         <div className="flex justify-between items-center">
                             <div>
                                 <h1 className="text-2xl font-black text-white tracking-tighter uppercase italic">
-                                    🌱 Painel <span className="text-emerald-500">Mudas</span>
+                                    🌱 Sistema de <span className="text-emerald-500">Ponto</span>
                                 </h1>
                                 <p className="text-[10px] font-mono text-gray-400 mt-1 uppercase tracking-widest">
                                     Módulo_Administrativo // {currentUser?.name || 'ADMIN'}
@@ -405,9 +420,9 @@ const AdminDashboard = () => {
                                 <InstallButton />
                                 <button
                                     onClick={handleLogout}
-                                    className="px-6 py-2 bg-white/5 border border-white/10 text-white font-black text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-500 hover:text-black hover:border-emerald-500 transition-all active:scale-95 shadow-lg"
+                                    className="px-6 py-2 bg-white/5 border border-white/10 text-white font-black text-[10px] uppercase tracking-[0.2em] hover:bg-red-500 hover:text-white hover:border-red-500 transition-all active:scale-95 shadow-lg"
                                 >
-                                    LOGOUT_SYSTEM
+                                    SAIR
                                 </button>
                             </div>
                         </div>
@@ -421,14 +436,15 @@ const AdminDashboard = () => {
                             {[
                                 { id: 'overview', label: 'Visão Geral', icon: '📊' },
                                 { id: 'employees', label: 'Funcionários', icon: '👥' },
-                                { id: 'reports', label: 'Relatórios', icon: '📋' }
+                                { id: 'reports', label: 'Relatórios', icon: '📋' },
+                                { id: 'settings', label: 'Configurações', icon: '⚙️' }
                             ].map((tab) => (
                                 <button
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
                                     className={`py-4 px-1 border-b-2 font-black text-[10px] uppercase tracking-widest transition-all ${activeTab === tab.id
                                         ? 'border-emerald-500 text-emerald-500'
-                                        : 'border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700'
+                                        : 'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-700'
                                         }`}
                                 >
                                     <span className="mr-2">{tab.icon}</span>
@@ -447,14 +463,14 @@ const AdminDashboard = () => {
                                 <h2 className="text-2xl font-black text-white tracking-tight uppercase border-l-4 border-emerald-500 pl-4">
                                     Status da Operação
                                 </h2>
-                                <p className="text-xs font-mono text-gray-500 uppercase tracking-widest">
+                                <p className="text-xs font-mono text-gray-400 uppercase tracking-widest">
                                     Live Update: {new Date().toLocaleTimeString()}
                                 </p>
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                                 <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-6 shadow-2xl">
-                                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Funcionários Ativos</p>
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Funcionários Ativos</p>
                                     <div className="flex items-baseline gap-2">
                                         <span className="text-4xl font-black text-white">{employees.length}</span>
                                         <span className="text-[10px] font-bold text-emerald-500">UNIDADES</span>
@@ -462,7 +478,7 @@ const AdminDashboard = () => {
                                 </div>
 
                                 <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-6 shadow-2xl">
-                                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Presentes Agora</p>
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Presentes Agora</p>
                                     <div className="flex items-baseline gap-2">
                                         <span className="text-4xl font-black text-emerald-500">{stats.present}</span>
                                         <span className="text-[10px] font-bold text-emerald-500">EM CAMPO</span>
@@ -470,7 +486,7 @@ const AdminDashboard = () => {
                                 </div>
 
                                 <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-6 shadow-2xl border-l-orange-500">
-                                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Justificativas</p>
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Justificativas</p>
                                     <div className="flex items-baseline gap-2">
                                         <span className="text-4xl font-black text-orange-500">{stats.justifications}</span>
                                         <span className="text-[10px] font-bold text-orange-500">PENDENTES</span>
@@ -478,7 +494,7 @@ const AdminDashboard = () => {
                                 </div>
 
                                 <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-6 shadow-2xl">
-                                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Sincronização</p>
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Sincronização</p>
                                     <div className="flex items-center gap-2 mt-2">
                                         <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
                                         <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Estável</span>
@@ -503,12 +519,17 @@ const AdminDashboard = () => {
                                                                 log.type === 'saida_almoco' ? '🍽️ Saída Almoço' :
                                                                     log.type === 'volta_almoco' ? '↩️ Volta Almoço' : '🌙 Saída'}
                                                         </p>
-                                                        <p className="text-[10px] text-gray-500 font-mono">
+                                                        <p className="text-[10px] text-gray-400 font-mono">
                                                             {log.userName} • {log.timestamp?.toDate().toLocaleTimeString('pt-BR')}
                                                         </p>
                                                     </div>
                                                 </div>
-                                                <span className="text-[9px] font-black text-emerald-500 uppercase tracking-tighter bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5">OK</span>
+                                                <span className={`text-[9px] font-black uppercase tracking-tighter border px-2 py-0.5 ${log.location && calculateDistance(log.location.latitude, log.location.longitude, geofence.latitude, geofence.longitude) > geofence.radius
+                                                    ? 'text-red-500 bg-red-500/10 border-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.2)]'
+                                                    : 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
+                                                    }`}>
+                                                    {log.location && calculateDistance(log.location.latitude, log.location.longitude, geofence.latitude, geofence.longitude) > geofence.radius ? 'FORA_PERÍMETRO' : 'OK'}
+                                                </span>
                                             </div>
                                         )) : (
                                             <div className="p-12 text-center text-gray-600 font-mono text-xs uppercase italic tracking-widest">
@@ -527,12 +548,12 @@ const AdminDashboard = () => {
                                         <button onClick={() => setActiveTab('reports')} className="group bg-white/5 border border-white/10 p-5 text-left hover:border-emerald-500/50 hover:bg-white/10 transition-all shadow-lg active:scale-95">
                                             <p className="text-2xl mb-2 group-hover:scale-110 transition-transform">📄</p>
                                             <p className="text-xs font-black text-white uppercase leading-none tracking-tight">Exportar Folha</p>
-                                            <p className="text-[10px] text-gray-500 mt-2 font-mono uppercase tracking-widest">PDF_Download</p>
+                                            <p className="text-[10px] text-gray-400 mt-2 font-mono uppercase tracking-widest">PDF_Download</p>
                                         </button>
                                         <button onClick={() => setShowRegisterModal(true)} className="group bg-white/5 border border-white/10 p-5 text-left hover:border-emerald-500/50 hover:bg-white/10 transition-all shadow-lg active:scale-95">
                                             <p className="text-2xl mb-2 group-hover:scale-110 transition-transform">➕</p>
                                             <p className="text-xs font-black text-white uppercase leading-none tracking-tight">Novo Registro</p>
-                                            <p className="text-[10px] text-gray-500 mt-2 font-mono uppercase tracking-widest">Add_Employee</p>
+                                            <p className="text-[10px] text-gray-400 mt-2 font-mono uppercase tracking-widest">Add_Employee</p>
                                         </button>
                                     </div>
                                 </div>
@@ -584,7 +605,7 @@ const AdminDashboard = () => {
                                                 <tr key={emp.id} className="hover:bg-white/5 transition-colors group">
                                                     <td className="px-6 py-4 whitespace-nowrap">
                                                         <div className="flex items-center">
-                                                            <div className="h-10 w-10 border border-white/10 bg-white/5 text-gray-500 flex items-center justify-center font-black text-xl group-hover:border-emerald-500 group-hover:text-emerald-500 transition-all">
+                                                            <div className="h-10 w-10 border border-white/10 bg-white/5 text-gray-400 flex items-center justify-center font-black text-xl group-hover:border-emerald-500 group-hover:text-emerald-500 transition-all">
                                                                 {emp.name?.charAt(0).toUpperCase() || 'U'}
                                                             </div>
                                                             <div className="ml-4">
@@ -741,7 +762,7 @@ const AdminDashboard = () => {
                                         </div>
 
                                         <div className="overflow-x-auto shadow-2xl">
-                                            <h3 className="text-gray-500 text-[10px] font-black uppercase tracking-[0.3em] mb-6 italic">Log_Detalhado_Full_Audit</h3>
+                                            <h3 className="text-gray-400 text-[10px] font-black uppercase tracking-[0.3em] mb-6 italic">Log_Detalhado_Full_Audit</h3>
                                             <table className="w-full text-left font-mono text-[9px] uppercase tracking-widest">
                                                 <thead>
                                                     <tr className="bg-white/5 text-emerald-500/50">
@@ -768,8 +789,8 @@ const AdminDashboard = () => {
                                                             <td className="px-5 py-4 italic">
                                                                 {log.location ? (
                                                                     <div className="flex items-center gap-3">
-                                                                        <span className={`w-1.5 h-1.5 rounded-full ${calculateDistance(log.location.latitude, log.location.longitude, GREENHOUSE_LOCATION.latitude, GREENHOUSE_LOCATION.longitude) > GREENHOUSE_LOCATION.radius ? 'bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.5)]' : 'bg-emerald-500'}`}></span>
-                                                                        <span>{Math.round(calculateDistance(log.location.latitude, log.location.longitude, GREENHOUSE_LOCATION.latitude, GREENHOUSE_LOCATION.longitude))}m</span>
+                                                                        <span className={`w-1.5 h-1.5 rounded-full ${calculateDistance(log.location.latitude, log.location.longitude, geofence.latitude, geofence.longitude) > geofence.radius ? 'bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.5)]' : 'bg-emerald-500'}`}></span>
+                                                                        <span>{Math.round(calculateDistance(log.location.latitude, log.location.longitude, geofence.latitude, geofence.longitude))}m</span>
                                                                     </div>
                                                                 ) : '---'}
                                                             </td>
@@ -797,6 +818,117 @@ const AdminDashboard = () => {
                                         </p>
                                     </div>
                                 )}
+                            </div>
+                        </div>
+                    )}
+                    {activeTab === 'settings' && (
+                        <div className="space-y-6 animate-fade-in">
+                            <div className="flex justify-between items-end">
+                                <h2 className="text-2xl font-black text-white tracking-tight uppercase border-l-4 border-emerald-500 pl-4">
+                                    Configurações do Sistema
+                                </h2>
+                            </div>
+
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-8 shadow-2xl space-y-8">
+                                    <div>
+                                        <h3 className="text-emerald-500 text-[10px] font-black uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
+                                            <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
+                                            Perímetro de Geofencing
+                                        </h3>
+                                        <div className="space-y-6">
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="space-y-2">
+                                                    <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Latitude_Centro</label>
+                                                    <input
+                                                        type="number"
+                                                        step="any"
+                                                        className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xs text-white"
+                                                        value={geofence.latitude}
+                                                        onChange={e => setGeofence({ ...geofence, latitude: parseFloat(e.target.value) })}
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Longitude_Centro</label>
+                                                    <input
+                                                        type="number"
+                                                        step="any"
+                                                        className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xs text-white"
+                                                        value={geofence.longitude}
+                                                        onChange={e => setGeofence({ ...geofence, longitude: parseFloat(e.target.value) })}
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Raio_Tolerância (Metros)</label>
+                                                <input
+                                                    type="number"
+                                                    className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xs text-white"
+                                                    value={geofence.radius}
+                                                    onChange={e => setGeofence({ ...geofence, radius: parseInt(e.target.value) })}
+                                                />
+                                            </div>
+
+                                            <div className="flex flex-col gap-3">
+                                                <button
+                                                    onClick={() => {
+                                                        navigator.geolocation.getCurrentPosition(pos => {
+                                                            setGeofence({
+                                                                ...geofence,
+                                                                latitude: pos.coords.latitude,
+                                                                longitude: pos.coords.longitude
+                                                            });
+                                                        });
+                                                    }}
+                                                    className="w-full py-3 border border-emerald-500/30 text-emerald-500 text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500/10 transition-all flex items-center justify-center gap-2"
+                                                >
+                                                    📍 Capturar_Minha_Localização_Atual
+                                                </button>
+
+                                                <button
+                                                    onClick={async () => {
+                                                        setIsSavingSettings(true);
+                                                        try {
+                                                            await setDoc(doc(db, 'settings', 'geofence'), {
+                                                                latitude: geofence.latitude,
+                                                                longitude: geofence.longitude,
+                                                                radius: geofence.radius,
+                                                                updatedAt: new Date().toISOString()
+                                                            });
+                                                            alert('Configurações de Geofencing atualizadas com sucesso! ✅');
+                                                        } catch (error) {
+                                                            alert('Erro ao salvar: ' + error.message);
+                                                        } finally {
+                                                            setIsSavingSettings(false);
+                                                        }
+                                                    }}
+                                                    disabled={isSavingSettings}
+                                                    className="w-full bg-emerald-500 text-black py-4 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-400 transition-all shadow-lg flex items-center justify-center gap-2"
+                                                >
+                                                    {isSavingSettings ? 'Salvando...' : '💾 Salvar_Configurações_Globais'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-emerald-500/5 border border-emerald-500/10 p-8 shadow-inner">
+                                    <h3 className="text-gray-400 text-[10px] font-black uppercase tracking-[0.3em] mb-6 italic">Instruções_de_Configuração</h3>
+                                    <div className="space-y-6 text-gray-400 font-mono text-[10px] uppercase tracking-widest leading-relaxed">
+                                        <p>
+                                            <span className="text-emerald-500 font-black">[!]</span> O Geofencing define a "Cerca Virtual" onde os colaboradores são autorizados a registrar o ponto.
+                                        </p>
+                                        <p>
+                                            <span className="text-emerald-500 font-black">[!]</span> Batidas fora do raio definido serão marcadas com um alerta vermelho nos relatórios para auditoria.
+                                        </p>
+                                        <p>
+                                            <span className="text-emerald-500 font-black">[!]</span> Para maior precisão, o administrador deve estar fisicamente no centro da estufa ao clicar em "CAPTURAR LOCALIZAÇÃO".
+                                        </p>
+                                        <div className="pt-6 border-t border-white/5">
+                                            <p className="text-[8px] opacity-50">SISTEMA_V_1.0 // AUDIT_READY</p>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     )}

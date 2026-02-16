@@ -204,7 +204,7 @@ const PunchButton = () => {
                                 onClick={() => setSelectedType(value)}
                                 className={`p-5 border transition-all active:scale-95 text-left relative overflow-hidden group ${selectedType === value
                                     ? 'bg-emerald-500/10 border-emerald-500 text-emerald-500'
-                                    : 'bg-white/2 border-white/5 text-gray-500 hover:border-white/20'
+                                    : 'bg-white/2 border-white/5 text-gray-400 hover:border-white/20'
                                     }`}
                             >
                                 <div className="absolute top-0 right-0 p-1 opacity-10">
@@ -270,7 +270,7 @@ const PunchButton = () => {
                     <div className="flex gap-4">
                         <button
                             onClick={cancelPunch}
-                            className="flex-1 py-4 border border-white/10 text-gray-500 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all active:scale-95"
+                            className="flex-1 py-4 border border-white/10 text-gray-400 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all active:scale-95"
                         >
                             Abortar
                         </button>
@@ -311,7 +311,7 @@ const PunchButton = () => {
                     <div className="flex gap-4">
                         <button
                             onClick={cancelPunch}
-                            className="flex-1 py-4 border border-white/10 text-gray-500 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all active:scale-95"
+                            className="flex-1 py-4 border border-white/10 text-gray-400 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all active:scale-95"
                         >
                             Refazer
                         </button>

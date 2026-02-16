@@ -14,6 +14,7 @@ export const useAuth = () => useContext(AuthContext);
 export const AuthProvider = ({ children }) => {
     const [currentUser, setCurrentUser] = useState(null);
     const [userRole, setUserRole] = useState(null);
+    const [currentCompany, setCurrentCompany] = useState(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -22,19 +23,34 @@ export const AuthProvider = ({ children }) => {
                 if (user) {
                     // Buscar dados do usuário no Firestore
                     const userDoc = await getDoc(doc(db, 'users', user.uid));
+                    let fullUser = null;
+
                     if (userDoc.exists()) {
                         const userData = userDoc.data();
-                        setCurrentUser({ ...user, ...userData });
+                        fullUser = { ...user, ...userData };
+                        setCurrentUser(fullUser);
                         setUserRole(userData.role);
+
+                        // Se o usuário tem uma empresa vinculada, buscar dados da empresa
+                        if (userData.companyId) {
+                            try {
+                                const companyDoc = await getDoc(doc(db, 'companies', userData.companyId));
+                                if (companyDoc.exists()) {
+                                    setCurrentCompany({ id: companyDoc.id, ...companyDoc.data() });
+                                }
+                            } catch (error) {
+                                console.error("Erro ao buscar empresa:", error);
+                            }
+                        }
                     } else {
-                        // Fallback if firestore doc doesn't exist yet
-                        // Isso pode acontecer se o Auth for criado mas o Firestore falhar/demorar
+                        // Fallback para novos usuários (Google Auth, etc)
                         setCurrentUser(user);
-                        setUserRole('employee'); // Default role to avoid locking out
+                        setUserRole('employee');
                     }
                 } else {
                     setCurrentUser(null);
                     setUserRole(null);
+                    setCurrentCompany(null);
                 }
             } catch (err) {
                 console.error("Auth State Change Error:", err);
@@ -67,6 +83,8 @@ export const AuthProvider = ({ children }) => {
     const value = {
         currentUser,
         userRole,
+        currentCompany,
+        setCurrentCompany, // Expor setter para atualizar após criação
         login,
         logout,
         loading

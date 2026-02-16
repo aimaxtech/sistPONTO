@@ -2,25 +2,187 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
-import { collection, getDocs, query, where, orderBy, limit, doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { collection, getDocs, query, where, orderBy, limit, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, serverTimestamp as firestoreTimestamp } from 'firebase/firestore';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth, db } from '../services/firebase';
 import InstallButton from '../components/InstallButton';
 import { GREENHOUSE_LOCATION } from '../config/firebase';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
 const AdminDashboard = () => {
-    const { currentUser, logout } = useAuth();
+    const { currentUser, userRole, currentCompany, setCurrentCompany, logout } = useAuth();
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('overview');
+
+    // Se não tiver empresa vinculada, força o setup
+    const [showCompanySetup, setShowCompanySetup] = useState(false);
+
+    // Dados para criar/editar empresa
+    const [companyForm, setCompanyForm] = useState({
+        name: '',
+        cnpj: '',
+        phone: '',
+        address: '',
+        workSchedule: 'monday_friday',
+        latitude: '',
+        longitude: '',
+        radius: 100,
+        workHours: 8
+    });
+
+    useEffect(() => {
+        // Lógica Rigorosa de Setup:
+        // 1. Se não tem empresa vinculada -> Setup
+        // 2. Se tem empresa, mas está incompleta (sem CNPJ ou LoginCode) -> Setup
+
+        const isCompanyIncomplete = currentCompany && (!currentCompany.cnpj || !currentCompany.loginCode || !currentCompany.name);
+        const hasNoCompany = currentUser && userRole === 'admin' && !currentUser.companyId && !currentCompany;
+
+        if (hasNoCompany || isCompanyIncomplete) {
+            setShowCompanySetup(true);
+        } else {
+            setShowCompanySetup(false);
+        }
+
+        if (currentCompany) {
+            // Preencher formulário com o que já existe
+            setCompanyForm({
+                name: currentCompany.name || '',
+                cnpj: currentCompany.cnpj || '',
+                phone: currentCompany.phone || '',
+                address: currentCompany.address || '',
+                latitude: currentCompany.location?.latitude || '',
+                longitude: currentCompany.location?.longitude || '',
+                radius: currentCompany.radius || 100,
+                workHours: currentCompany.workHours || 8,
+                workSchedule: currentCompany.workSchedule || 'monday_friday'
+            });
+        }
+    }, [currentUser, currentCompany, userRole]);
+
     const [employees, setEmployees] = useState([]);
+    // Helper: Gerar código da empresa (5 dígitos baseados em timestamp para unicidade)
+    const generateCompanyCode = () => {
+        return Date.now().toString().slice(-5);
+    };
+
+    // Helper: Formata CNPJ (00.000.000/0000-00)
+    const formatCNPJ = (value) => {
+        return value
+            .replace(/\D/g, '')
+            .replace(/^(\d{2})(\d)/, '$1.$2')
+            .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+            .replace(/\.(\d{3})(\d)/, '.$1/$2')
+            .replace(/(\d{4})(\d)/, '$1-$2')
+            .slice(0, 18);
+    };
+
+    // Helper: Valida CNPJ (Matemática Real)
+    const validateCNPJ = (cnpj) => {
+        cnpj = cnpj.replace(/[^\d]+/g, '');
+        if (cnpj === '') return false;
+        if (cnpj.length !== 14) return false;
+
+        // Elimina CNPJs invalidos conhecidos
+        if (/^(\d)\1+$/.test(cnpj)) return false;
+
+        // Valida DVs
+        let tamanho = cnpj.length - 2;
+        let numeros = cnpj.substring(0, tamanho);
+        let digitos = cnpj.substring(tamanho);
+        let soma = 0;
+        let pos = tamanho - 7;
+        for (let i = tamanho; i >= 1; i--) {
+            soma += numeros.charAt(tamanho - i) * pos--;
+            if (pos < 2) pos = 9;
+        }
+        let resultado = soma % 11 < 2 ? 0 : 11 - soma % 11;
+        if (resultado !== parseInt(digitos.charAt(0))) return false;
+
+        tamanho = tamanho + 1;
+        numeros = cnpj.substring(0, tamanho);
+        soma = 0;
+        pos = tamanho - 7;
+        for (let i = tamanho; i >= 1; i--) {
+            soma += numeros.charAt(tamanho - i) * pos--;
+            if (pos < 2) pos = 9;
+        }
+        resultado = soma % 11 < 2 ? 0 : 11 - soma % 11;
+        if (resultado !== parseInt(digitos.charAt(1))) return false;
+
+        return true;
+    };
+
+    const handleSaveCompany = async (e) => {
+        e.preventDefault();
+
+        // Validação CNPJ
+        if (!validateCNPJ(companyForm.cnpj)) {
+            alert("⚠️ CNPJ Inválido! Verifique os números digitados.");
+            return; // Bloqueia o salvamento
+        }
+
+        setIsSavingSettings(true);
+
+        try {
+            // Gerar ou manter código de login da empresa
+            const loginCode = currentCompany?.loginCode || generateCompanyCode();
+
+            const companyData = {
+                name: companyForm.name,
+                cnpj: companyForm.cnpj || '',
+                phone: companyForm.phone || '',
+                address: companyForm.address || '',
+                workSchedule: companyForm.workSchedule || 'monday_friday', // Save schedule
+                loginCode: loginCode, // Salvar código para login dos funcionários
+                location: {
+                    latitude: parseFloat(companyForm.latitude),
+                    longitude: parseFloat(companyForm.longitude)
+                },
+                radius: parseInt(companyForm.radius),
+                workHours: parseInt(companyForm.workHours),
+                ownerId: currentUser.uid,
+                updatedAt: firestoreTimestamp()
+            };
+
+            if (currentCompany && currentCompany.id) {
+                // Atualizar existente
+                const companyRef = doc(db, 'companies', currentCompany.id);
+                await updateDoc(companyRef, companyData);
+
+                setCurrentCompany({ id: currentCompany.id, ...companyData });
+                alert('Configurações da empresa atualizadas com sucesso!');
+            } else {
+                // Criar nova
+                const docRef = await addDoc(collection(db, 'companies'), {
+                    ...companyData,
+                    createdAt: firestoreTimestamp()
+                });
+
+                // Vincular ao Admin
+                const userRef = doc(db, 'users', currentUser.uid);
+                await updateDoc(userRef, { companyId: docRef.id });
+
+                setCurrentCompany({ id: docRef.id, ...companyData });
+                setShowCompanySetup(false);
+                alert(`Organização criada! O código da sua empresa é: ${loginCode}`);
+            }
+        } catch (error) {
+            console.error("Erro ao salvar empresa:", error);
+            alert("Erro ao salvar dados da empresa: " + error.message);
+        } finally {
+            setIsSavingSettings(false);
+        }
+    };
+
     const [stats, setStats] = useState({ present: 0, justifications: 0, loading: true });
     const [recentLogs, setRecentLogs] = useState([]);
     const [showRegisterModal, setShowRegisterModal] = useState(false);
     const [newEmployee, setNewEmployee] = useState({ name: '', matricula: '', password: '', role: 'employee' });
     const [reportFilters, setReportFilters] = useState({
-        start: new Date().toISOString().slice(0, 10),
-        end: new Date().toISOString().slice(0, 10),
+        start: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`,
+        end: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`,
         employeeId: 'all'
     });
     const [reportData, setReportData] = useState([]);
@@ -33,6 +195,23 @@ const AdminDashboard = () => {
         loading: true
     });
     const [isSavingSettings, setIsSavingSettings] = useState(false);
+
+    // Audit Actions States
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [auditLog, setAuditLog] = useState(null);
+    const [auditReason, setAuditReason] = useState('');
+    const [editData, setEditData] = useState({ type: '', time: '', date: '' });
+
+    // Status Management States
+    const [showStatusModal, setShowStatusModal] = useState(false);
+    const [statusData, setStatusData] = useState({ type: 'ativo', start: '', end: '' });
+    const [selectedEmp, setSelectedEmp] = useState(null);
+
+    // Manual Password Reset States
+    const [showPassResetModal, setShowPassResetModal] = useState(false);
+    const [newPassForm, setNewPassForm] = useState({ password: '', confirm: '' });
+    const [isResettingPass, setIsResettingPass] = useState(false);
 
     const calculateDistance = (lat1, lon1, lat2, lon2) => {
         const R = 6371e3; // metres
@@ -49,80 +228,235 @@ const AdminDashboard = () => {
         return R * c; // in metres
     };
 
+    // Movemos fetchEmployees para fora para ser reutilizável
+    const fetchEmployees = async () => {
+        if (!currentCompany?.id) return;
+        try {
+            console.log("🔍 Buscando funcionários para empresa:", currentCompany.id);
+            const q = query(
+                collection(db, 'users'),
+                where('companyId', '==', currentCompany.id)
+            );
+            const querySnapshot = await getDocs(q);
+            const users = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+            // Ordenar na memória para evitar necessidade de índice composto no Firestore
+            const sortedUsers = users.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+            // Filter only employees
+            const onlyEmployees = sortedUsers.filter(u => u.role === 'employee');
+            console.log("✅ Funcionários encontrados:", onlyEmployees.length);
+            setEmployees(onlyEmployees);
+        } catch (error) {
+            console.error("❌ Erro ao buscar funcionários:", error);
+            alert("Erro ao carregar lista de funcionários. Verifique o console ou índices do banco.");
+        }
+    };
+
+    const handleResetPassword = (emp) => {
+        setSelectedEmp(emp);
+        setNewPassForm({ password: '', confirm: '' });
+        setShowPassResetModal(true);
+    };
+
+    const confirmManualPasswordReset = async (e) => {
+        e.preventDefault();
+        if (newPassForm.password !== newPassForm.confirm) {
+            alert("❌ As senhas não coincidem!");
+            return;
+        }
+        if (newPassForm.password.length < 6) {
+            alert("❌ A senha deve ter no mínimo 6 caracteres!");
+            return;
+        }
+
+        setIsResettingPass(true);
+        try {
+            const userRef = doc(db, 'users', selectedEmp.id);
+            // Salvamos a senha em um campo fixo para contornar a limitação do Firebase Client SDK
+            // No login, verificaremos este campo.
+            await updateDoc(userRef, {
+                passwordOverride: newPassForm.password,
+                updatedAt: firestoreTimestamp()
+            });
+
+            alert(`✅ Senha do colaborador "${selectedEmp.name}" alterada com sucesso!`);
+            setShowPassResetModal(false);
+        } catch (error) {
+            console.error("Erro ao resetar senha:", error);
+            alert("❌ Erro ao salvar nova senha: " + error.message);
+        } finally {
+            setIsResettingPass(false);
+        }
+    };
+
     useEffect(() => {
         const fetchDashboardData = async () => {
+            if (!currentUser) return;
+
+            setStats(prev => ({ ...prev, loading: true }));
             try {
-                // Fetch Geofence Settings
-                const geoDoc = await getDoc(doc(db, 'settings', 'geofence'));
-                if (geoDoc.exists()) {
-                    setGeofence({ ...geoDoc.data(), loading: false });
-                } else {
-                    setGeofence(prev => ({ ...prev, loading: false }));
+                // Fetch Geofence Settings (Agora vem do currentCompany, não do banco global)
+                if (currentCompany && currentCompany.location) {
+                    setGeofence({
+                        latitude: currentCompany.location.latitude,
+                        longitude: currentCompany.location.longitude,
+                        radius: currentCompany.radius || 100,
+                        loading: false
+                    });
                 }
 
-                // Fetch Employees
-                const empSnapshot = await getDocs(collection(db, 'users'));
-                const empList = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setEmployees(empList);
+                // Fetch data only if company is loaded
+                if (currentCompany) {
+                    fetchEmployees();
 
-                // Fetch Today's Punches for "Present Now"
-                const today = new Date().toISOString().slice(0, 10);
-                const punchQuery = query(collection(db, 'punches'), where('date', '==', today));
-                const punchSnapshot = await getDocs(punchQuery);
+                    // Buscar reports/stats apenas da empresa atual
+                    // Como punches não tem companyId por enquanto (migração), filtramos pelos users
+                    // Mas para dashboard rápido, vamos assumir que o admin só vê dados se filtrar
 
-                // Simple logic for present: unique userIds that have an 'entrada' today
-                const presentUsers = new Set();
-                punchSnapshot.docs.forEach(doc => {
-                    const punch = doc.data();
-                    if (punch.type === 'entrada') presentUsers.add(punch.userId);
-                    // Could be refined to handle entry/exit pairs
-                });
+                    // Fetch Today's Punches for Stats
+                    // Precisamos filtrar por usuários da empresa
+                    // Para simplificar: buscar punches de hoje e filtrar na memória pelos employees.id
 
-                // Fetch Recent Logs
-                const recentQuery = query(collection(db, 'punches'), orderBy('timestamp', 'desc'), limit(5));
-                const recentSnapshot = await getDocs(recentQuery);
-                const logs = recentSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setRecentLogs(logs);
+                    const now = new Date();
+                    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
-                setStats({
-                    present: presentUsers.size,
-                    justifications: 0, // Need a collection for this
-                    loading: false
-                });
+                    // Melhor: buscar punches onde userId IN [lista_de_ids_da_empresa]
+                    // Mas 'in' queries tem limite de 10.
+                    // Abordagem escalável: Buscar todos punches do dia e filtrar os que user.companyId == current
+                    // (Isso requer join, firebase não faz).
+                    // Abordagem atual: Buscar todos os punches (se for pouco) ou filtrar por Admin?
+                    // Vamos manter simples: Mostrar stats zerado até implementar filtro robusto no backend
+                    // Ou fazer query por userId se for poucos employees.
+
+                    // Solução Temporária Eficiente:
+                    // Buscar 'punches' where 'date' == today. 
+                    // Depois filtrar no cliente cruzando com a lista de funcionários 'employees'
+
+                    const punchQuery = query(collection(db, 'punches'), where('date', '==', today));
+                    const punchSnapshot = await getDocs(punchQuery);
+
+                    // Precisamos da lista de IDs dos funcionários desta empresa
+                    // Como fetchEmployees é async e setEmployees é assíncrono, talvez employees esteja vazio aqui
+                    // Vamos fazer uma busca rápida de IDs ou confiar que o fluxo seguinte resolve
+
+                    const companyUserDocs = await getDocs(query(collection(db, 'users'), where('companyId', '==', currentCompany.id)));
+                    const companyUserIds = new Set(companyUserDocs.docs.map(d => d.id));
+
+                    const presentUsers = new Set();
+                    let eventualCount = 0;
+                    let pendingJustifications = 0;
+
+                    punchSnapshot.docs.forEach(doc => {
+                        const punch = doc.data();
+                        // Só conta se o usuário for da empresa
+                        if (companyUserIds.has(punch.userId)) {
+                            if (punch.type === 'entrada') presentUsers.add(punch.userId);
+                            if (punch.type === 'saida_eventual') eventualCount++;
+                            if (punch.type === 'saida_eventual' && !punch.isAbonado) pendingJustifications++;
+                        }
+                    });
+
+                    setStats({
+                        present: presentUsers.size,
+                        eventuals: eventualCount,
+                        pending: pendingJustifications,
+                        loading: false
+                    });
+
+                    // Fetch Recent Logs
+                    const recentQuery = query(collection(db, 'punches'), orderBy('timestamp', 'desc'), limit(5));
+                    const recentSnapshot = await getDocs(recentQuery);
+                    const logs = recentSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setRecentLogs(logs);
+                } else {
+                    setStats(prev => ({ ...prev, loading: false }));
+                }
 
             } catch (error) {
-                console.error("Erro ao buscar dados do dashboard:", error);
+                console.error("Erro dashboard:", error);
                 setStats(prev => ({ ...prev, loading: false }));
             }
         };
 
         fetchDashboardData();
-    }, [activeTab]);
+    }, [activeTab, currentCompany, currentUser]); // Re-run when company loads
 
     const handleGenerateReport = async () => {
         setIsGeneratingReport(true);
         try {
-            let q = query(
-                collection(db, 'punches'),
-                where('date', '>=', reportFilters.start),
-                where('date', '<=', reportFilters.end),
-                orderBy('date', 'desc'),
-                orderBy('timestamp', 'asc')
-            );
+            let q;
+            let allDocs = [];
 
             if (reportFilters.employeeId !== 'all') {
-                q = query(q, where('userId', '==', reportFilters.employeeId));
+                // Se filtramos por funcionário, pegamos todos dele e filtramos data na memória
+                q = query(collection(db, 'punches'), where('userId', '==', reportFilters.employeeId));
+                const snap = await getDocs(q);
+                allDocs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+                    .filter(p => p.date >= reportFilters.start && p.date <= reportFilters.end);
+            } else {
+                // Se filtramos por clínica toda, pegamos por data (query simples em um só campo)
+                q = query(
+                    collection(db, 'punches'),
+                    where('date', '>=', reportFilters.start),
+                    where('date', '<=', reportFilters.end)
+                );
+                const snap = await getDocs(q);
+                allDocs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             }
 
-            const querySnapshot = await getDocs(q);
-            const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setReportData(data);
+            // Ordenar por data (desc) e depois por timestamp (asc) em JavaScript
+            const sortedData = allDocs.sort((a, b) => {
+                // Primeiro por data decrescente
+                if (a.date !== b.date) {
+                    return b.date.localeCompare(a.date);
+                }
+                const timeA = a.timestamp?.toDate ? a.timestamp.toDate() : new Date(a.offlineTimestamp || 0);
+                const timeB = b.timestamp?.toDate ? b.timestamp.toDate() : new Date(b.offlineTimestamp || 0);
+                return timeA - timeB;
+            });
+
+            setReportData(sortedData);
         } catch (error) {
             console.error("Erro ao gerar relatório:", error);
-            alert("Erro ao gerar relatório. Verifique os critérios.");
+            alert("Erro ao gerar relatório. Verifique sua conexão ou os filtros selecionados.");
         } finally {
             setIsGeneratingReport(false);
         }
+    };
+
+    const calculateHoursForDay = (punches) => {
+        let totalMs = 0;
+        const sorted = punches.sort((a, b) => {
+            const tA = a.timestamp?.toDate ? a.timestamp.toDate() : new Date();
+            const tB = b.timestamp?.toDate ? b.timestamp.toDate() : new Date();
+            return tA - tB;
+        });
+
+        let lastIn = null;
+        sorted.forEach((p, idx) => {
+            if (p.type === 'entrada' || p.type === 'volta_almoco' || p.type === 'volta_eventual') {
+                lastIn = p.timestamp?.toDate ? p.timestamp.toDate() : new Date();
+            } else if ((p.type === 'saida_almoco' || p.type === 'saida' || p.type === 'saida_eventual') && lastIn) {
+                const currentOut = p.timestamp?.toDate ? p.timestamp.toDate() : new Date();
+                totalMs += currentOut - lastIn;
+                lastIn = null;
+            }
+
+            // LÓGICA DE ABONO: Se o admin abonou a saída eventual, o tempo de intervalo é somado como trabalhado
+            if (p.type === 'saida_eventual' && p.isAbonado) {
+                const nextReturn = sorted.find((next, nIdx) => nIdx > idx && next.type === 'volta_eventual');
+                if (nextReturn) {
+                    const startAbo = p.timestamp?.toDate ? p.timestamp.toDate() : new Date();
+                    const endAbo = nextReturn.timestamp?.toDate ? nextReturn.timestamp.toDate() : new Date();
+                    totalMs += (endAbo - startAbo);
+                }
+            }
+        });
+
+        const diffHrs = Math.floor(totalMs / 3600000);
+        const diffMins = Math.round((totalMs % 3600000) / 60000);
+        return `${String(diffHrs).padStart(2, '0')}:${String(diffMins).padStart(2, '0')}`;
     };
 
     const calculateWorkedHoursSummary = (data) => {
@@ -136,31 +470,27 @@ const AdminDashboard = () => {
         });
 
         return Object.values(groups).map(group => {
-            const sorted = group.punches.sort((a, b) => {
-                const timeA = a.timestamp?.seconds || 0;
-                const timeB = b.timestamp?.seconds || 0;
-                return timeA - timeB;
-            });
-            let totalMs = 0;
-            let lastIn = null;
-
-            sorted.forEach(p => {
-                if (p.type === 'entrada' || p.type === 'volta_almoco') {
-                    lastIn = p.timestamp?.toDate ? p.timestamp.toDate() : new Date();
-                } else if ((p.type === 'saida_almoco' || p.type === 'saida') && lastIn) {
-                    const currentOut = p.timestamp?.toDate ? p.timestamp.toDate() : new Date();
-                    totalMs += currentOut - lastIn;
-                    lastIn = null;
-                }
-            });
-
-            const totalHours = totalMs / (1000 * 60 * 60);
+            const formattedTime = calculateHoursForDay(group.punches);
             return {
                 ...group,
-                totalHours,
-                formatted: `${Math.floor(totalHours)}h ${Math.round((totalHours % 1) * 60)}m`
+                formatted: formattedTime
             };
         }).sort((a, b) => b.date.localeCompare(a.date));
+    };
+
+    const handleAbonoToggle = async (log) => {
+        if (log.type !== 'saida_eventual') return;
+        try {
+            await updateDoc(doc(db, 'punches', log.id), {
+                isAbonado: !log.isAbonado,
+                abonadoBy: currentUser.uid,
+                abonadoAt: firestoreTimestamp()
+            });
+            handleGenerateReport(); // Atualiza a visualização
+            alert(log.isAbonado ? 'Abono removido.' : 'Saída eventual abonada com sucesso! ✅');
+        } catch (error) {
+            alert('Erro ao abonar: ' + error.message);
+        }
     };
 
     const handleExportPDF = () => {
@@ -172,15 +502,19 @@ const AdminDashboard = () => {
             const dist = log.location ? calculateDistance(
                 log.location.latitude,
                 log.location.longitude,
-                GREENHOUSE_LOCATION.latitude,
-                GREENHOUSE_LOCATION.longitude
+                geofence.latitude,
+                geofence.longitude
             ) : null;
+
+            // Tratamento robusto para registros online/offline
+            const ts = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.offlineTimestamp || Date.now());
+            const timeStr = ts.toLocaleTimeString('pt-BR');
 
             const rowData = [
                 log.date,
-                log.userName,
-                log.type,
-                log.timestamp?.toDate().toLocaleTimeString('pt-BR'),
+                log.userName || 'N/A',
+                log.type.toUpperCase(),
+                timeStr,
                 dist ? `${Math.round(dist)}m` : 'S/ GPS'
             ];
             tableRows.push(rowData);
@@ -201,12 +535,15 @@ const AdminDashboard = () => {
                 geofence.longitude
             )) : '';
 
+            const ts = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.offlineTimestamp || Date.now());
+            const timeStr = ts.toLocaleTimeString('pt-BR');
+
             return [
                 log.date,
-                log.userName,
+                log.userName || 'N/A',
                 log.matricula || '',
-                log.type,
-                log.timestamp?.toDate().toLocaleTimeString('pt-BR'),
+                log.type.toUpperCase(),
+                timeStr,
                 dist
             ].join(';');
         });
@@ -223,30 +560,31 @@ const AdminDashboard = () => {
         document.body.removeChild(link);
     };
 
+    const [isRegisteringEmp, setIsRegisteringEmp] = useState(false);
+
     // Secondary App for User Creation (prevents logging out admin)
     const handleRegister = async (e) => {
         e.preventDefault();
+        setIsRegisteringEmp(true);
 
         try {
-            // Check if matricula already exists (simple client-side check from loaded list)
-            if (employees.some(emp => emp.matricula === newEmployee.matricula)) {
-                alert('Erro: Matrícula já existe!');
+            // 1. Verificação Rigorosa no Firestore (não apenas no estado local)
+            const q = query(
+                collection(db, 'users'),
+                where('companyId', '==', currentCompany.id),
+                where('matricula', '==', newEmployee.matricula)
+            );
+            const querySnapshot = await getDocs(q);
+
+            if (!querySnapshot.empty) {
+                alert(`⚠️ Erro: A matrícula ${newEmployee.matricula} já está cadastrada para outro colaborador nesta empresa.`);
+                setIsRegisteringEmp(false);
                 return;
             }
 
-            // We need a way to create a user without logging out.
-            // In pure client-side Firebase, createUserWithEmailAndPassword signs in the new user immediately.
-            // The workaround is to create a temporary secondary app instance.
-            // However, initializing a second app with the same config often throws warnings or errors if not handled carefully.
-            // A simpler, robust way for this MVP is to use a cloud function or backend api.
-            // BUT, since we are frontend-only for now, let's use the secondary app trick carefully.
-
-            // For now, let's try the standard way and handle the re-auth or use a second app instance.
-            // Importing 'initializeApp' again to create a named app.
-
             const { initializeApp, getApp, getApps } = await import('firebase/app');
             const { getAuth, createUserWithEmailAndPassword, signOut } = await import('firebase/auth');
-            const { firebaseConfig } = await import('../config/firebase'); // ensure you export firebaseConfig
+            const { firebaseConfig } = await import('../config/firebase');
             const { doc, setDoc } = await import('firebase/firestore');
 
             const secondaryAppName = 'secondaryApp';
@@ -261,33 +599,122 @@ const AdminDashboard = () => {
             const secondaryAuth = getAuth(secondaryApp);
 
             // Create User in Auth
-            const emailFake = `${newEmployee.matricula}@estufa.sistema`;
-            const userCredential = await createUserWithEmailAndPassword(secondaryAuth, emailFake, newEmployee.password);
-            const user = userCredential.user;
+            const emailFake = `${currentCompany.loginCode}.${newEmployee.matricula}@empresa.ponto`;
 
-            // Create Profile in Firestore (using the main db instance is fine)
-            await setDoc(doc(db, 'users', user.uid), {
-                name: newEmployee.name,
-                matricula: newEmployee.matricula,
-                email: emailFake,
-                role: newEmployee.role,
-                createdAt: new Date().toISOString(),
-                active: true
-            });
+            try {
+                const userCredential = await createUserWithEmailAndPassword(secondaryAuth, emailFake, newEmployee.password);
+                const user = userCredential.user;
 
-            // Sign out the secondary auth immediatly so it doesn't interfere
-            await signOut(secondaryAuth);
+                // Create Profile in Firestore
+                await setDoc(doc(db, 'users', userCredential.user.uid), {
+                    uid: userCredential.user.uid,
+                    name: newEmployee.name,
+                    matricula: newEmployee.matricula,
+                    companyLoginCode: currentCompany.loginCode,
+                    email: emailFake,
+                    role: newEmployee.role,
+                    companyId: currentCompany.id,
+                    createdAt: firestoreTimestamp(),
+                    status: 'ativo'
+                });
 
-            alert('Funcionário cadastrado com sucesso! 🎉');
-            setShowRegisterModal(false);
-            setNewEmployee({ name: '', matricula: '', password: '', role: 'employee' });
+                await signOut(secondaryAuth);
+                alert('✅ Funcionário cadastrado com sucesso!');
+                setShowRegisterModal(false);
+                setNewEmployee({ name: '', matricula: '', password: '', role: 'employee' });
+                fetchEmployees(); // Recarrega a lista real
 
-            // Update List
-            setEmployees(prev => [...prev, { id: user.uid, ...newEmployee, email: emailFake }]);
+            } catch (authError) {
+                if (authError.code === 'auth/email-already-in-use') {
+                    alert(`⚠️ Erro Crítico: O identificador para esta matrícula (${newEmployee.matricula}) já existe no servidor de autenticação. Tente usar uma matrícula diferente.`);
+                } else {
+                    throw authError;
+                }
+            }
 
         } catch (error) {
             console.error("Erro ao cadastrar:", error);
-            alert(`Erro ao cadastrar: ${error.message}`);
+            alert(`❌ Erro no sistema: ${error.message}`);
+        } finally {
+            setIsRegisteringEmp(false);
+        }
+    };
+
+    const handleUpdateLog = async () => {
+        if (!auditLog || !auditReason) {
+            alert('Por favor, insira o motivo da alteração.');
+            return;
+        }
+
+        try {
+            const logRef = doc(db, 'punches', auditLog.id);
+
+            // Criar novo timestamp baseado na hora editada
+            const [hours, minutes] = editData.time.split(':');
+            const newDate = new Date(editData.date + 'T' + hours + ':' + minutes + ':00');
+
+            await updateDoc(logRef, {
+                type: editData.type,
+                date: editData.date,
+                timestamp: newDate,
+                lastEdit: {
+                    by: currentUser.uid,
+                    at: new Date().toISOString(),
+                    reason: auditReason
+                }
+            });
+
+            alert('Registro atualizado com sucesso! ✅');
+            setShowEditModal(false);
+            setAuditReason('');
+            handleGenerateReport(); // Atualizar tabela
+        } catch (error) {
+            alert('Erro ao atualizar: ' + error.message);
+        }
+    };
+
+    const handleDeleteLog = async () => {
+        if (!auditLog || !auditReason) {
+            alert('Por favor, insira o motivo da exclusão.');
+            return;
+        }
+
+        try {
+            // Salvar backup do registro excluído em uma coleção de auditoria
+            await addDoc(collection(db, 'deleted_punches'), {
+                ...auditLog,
+                deletedBy: currentUser.uid,
+                deletedAt: firestoreTimestamp(),
+                deleteReason: auditReason
+            });
+
+            // Excluir registro original
+            await deleteDoc(doc(db, 'punches', auditLog.id));
+
+            alert('Registro excluído com sucesso! 🗑️');
+            setShowDeleteModal(false);
+            setAuditReason('');
+            handleGenerateReport(); // Atualizar tabela
+        } catch (error) {
+            alert('Erro ao excluir: ' + error.message);
+        }
+    };
+
+    const handleUpdateStatus = async (e) => {
+        e.preventDefault();
+        try {
+            await updateDoc(doc(db, 'users', selectedEmp.id), {
+                status: statusData.type,
+                statusStart: statusData.start || null,
+                statusEnd: statusData.end || null
+            });
+            alert('Status do colaborador atualizado! 🔄');
+            setShowStatusModal(false);
+            // Refresh employee list
+            const empSnapshot = await getDocs(collection(db, 'users'));
+            setEmployees(empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        } catch (error) {
+            alert('Erro ao atualizar status: ' + error.message);
         }
     };
 
@@ -299,6 +726,7 @@ const AdminDashboard = () => {
             console.error('Erro ao sair:', error);
         }
     };
+
 
     return (
         <div className="min-h-screen bg-gray-900 text-gray-100 selection:bg-emerald-500/30 font-sans">
@@ -319,8 +747,8 @@ const AdminDashboard = () => {
 
                             <div className="bg-emerald-500/10 px-8 py-5 border-b border-white/5 flex justify-between items-center text-white">
                                 <div>
-                                    <h3 className="font-black uppercase tracking-[0.3em] text-xs text-emerald-500">Novo_Registro_Operador</h3>
-                                    <p className="text-[9px] font-mono text-emerald-500/40 uppercase mt-1">SISTEMA_IDENTIFICAÇÃO_V1.0</p>
+                                    <h3 className="font-black uppercase tracking-[0.3em] text-xs text-emerald-500">Novo Registro Operador</h3>
+                                    <p className="text-[9px] font-mono text-emerald-500/40 uppercase mt-1">SISTEMA IDENTIFICAÇÃO V1.0</p>
                                 </div>
                                 <button onClick={() => setShowRegisterModal(false)} className="text-white/50 hover:text-emerald-500 font-bold text-2xl transition-colors">&times;</button>
                             </div>
@@ -328,7 +756,7 @@ const AdminDashboard = () => {
                             <form onSubmit={handleRegister} className="p-8 space-y-6">
                                 <div className="space-y-5">
                                     <div className="space-y-2">
-                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Identificação_Nome</label>
+                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Identificação Nome</label>
                                         <input
                                             type="text"
                                             required
@@ -337,6 +765,16 @@ const AdminDashboard = () => {
                                             value={newEmployee.name}
                                             onChange={e => setNewEmployee({ ...newEmployee, name: e.target.value })}
                                         />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Código Corporativo (Vinculado)</label>
+                                        <input
+                                            type="text"
+                                            readOnly
+                                            value={currentCompany?.loginCode || ''}
+                                            className="w-full bg-white/5 border border-white/10 p-3 outline-none font-mono text-xs text-emerald-500/50 uppercase cursor-not-allowed"
+                                        />
+                                        <p className="text-[8px] font-mono text-gray-600 uppercase mt-1">Este código será exigido no login deste colaborador.</p>
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-2">
@@ -363,7 +801,7 @@ const AdminDashboard = () => {
                                         </div>
                                     </div>
                                     <div className="space-y-2">
-                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Permissão_Sistema</label>
+                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Permissão Sistema</label>
                                         <select
                                             className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xs text-white uppercase appearance-none cursor-pointer"
                                             value={newEmployee.role}
@@ -375,9 +813,184 @@ const AdminDashboard = () => {
                                     </div>
                                 </div>
                                 <div className="flex gap-4 pt-4 border-t border-white/5">
-                                    <button type="button" onClick={() => setShowRegisterModal(false)} className="flex-1 px-4 py-3 border border-white/10 text-gray-400 font-black text-[10px] uppercase tracking-widest hover:text-white hover:border-white/30 transition-all">ABORTAR</button>
-                                    <button type="submit" className="flex-1 px-4 py-3 bg-emerald-500 text-black font-black text-[10px] uppercase tracking-widest hover:bg-emerald-400 transition-all shadow-lg active:scale-95">CONFIRMAR_REGISTRO</button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowRegisterModal(false)}
+                                        className="flex-1 py-3 text-[10px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/5 text-white transition-colors"
+                                    >
+                                        Abortar
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isRegisteringEmp}
+                                        className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] ${isRegisteringEmp ? 'bg-emerald-900 text-emerald-500/50 cursor-not-allowed' : 'bg-emerald-500 text-black hover:bg-emerald-400'}`}
+                                    >
+                                        {isRegisteringEmp ? 'PROCESSANDO...' : 'Confirmar Registro'}
+                                    </button>
                                 </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
+                {/* Edit Modal */}
+                {showEditModal && (
+                    <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-md">
+                        <div className="bg-black/80 backdrop-blur-2xl border-2 border-blue-500/30 shadow-[0_0_50px_rgba(59,130,246,0.2)] w-full max-w-md overflow-hidden animate-fade-in relative">
+                            <div className="bg-blue-500/10 px-8 py-5 border-b border-white/5 flex justify-between items-center text-white">
+                                <div>
+                                    <h3 className="font-black uppercase tracking-[0.3em] text-xs text-blue-500">Ajuste_de_Registro</h3>
+                                    <p className="text-[9px] font-mono text-blue-500/40 uppercase mt-1">AUDITORIA_MOD_V1.0</p>
+                                </div>
+                                <button onClick={() => setShowEditModal(false)} className="text-white/50 hover:text-blue-500 font-bold text-2xl transition-colors">&times;</button>
+                            </div>
+
+                            <div className="p-8 space-y-6">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="block text-[10px] font-black text-blue-500/50 uppercase tracking-[0.2em] pl-1">Data</label>
+                                        <input
+                                            type="date"
+                                            className="w-full bg-white/5 border border-white/10 p-3 focus:border-blue-500 outline-none font-mono text-xs text-white"
+                                            value={editData.date}
+                                            onChange={e => setEditData({ ...editData, date: e.target.value })}
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="block text-[10px] font-black text-blue-500/50 uppercase tracking-[0.2em] pl-1">Horário</label>
+                                        <input
+                                            type="time"
+                                            className="w-full bg-white/5 border border-white/10 p-3 focus:border-blue-500 outline-none font-mono text-xs text-white"
+                                            value={editData.time}
+                                            onChange={e => setEditData({ ...editData, time: e.target.value })}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="block text-[10px] font-black text-blue-500/50 uppercase tracking-[0.2em] pl-1">Tipo de Registro</label>
+                                    <select
+                                        className="w-full bg-white/5 border border-white/10 p-3 focus:border-blue-500 outline-none font-mono text-xs text-white uppercase"
+                                        value={editData.type}
+                                        onChange={e => setEditData({ ...editData, type: e.target.value })}
+                                    >
+                                        <option value="entrada" className="bg-gray-900">ENTRADA</option>
+                                        <option value="saida_almoco" className="bg-gray-900">SAÍDA ALMOÇO</option>
+                                        <option value="volta_almoco" className="bg-gray-900">VOLTA ALMOÇO</option>
+                                        <option value="saida" className="bg-gray-900">SAÍDA FINAL</option>
+                                    </select>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="block text-[10px] font-black text-blue-500/50 uppercase tracking-[0.2em] pl-1 text-red-500">Motivo da Alteração *</label>
+                                    <textarea
+                                        required
+                                        className="w-full bg-white/5 border border-white/10 p-3 focus:border-blue-500 outline-none font-mono text-[10px] text-white h-24 uppercase"
+                                        placeholder="DESCREVA O MOTIVO DA MUDANÇA (AUDITÁVEL)"
+                                        value={auditReason}
+                                        onChange={e => setAuditReason(e.target.value)}
+                                    ></textarea>
+                                </div>
+                                <div className="flex gap-4 pt-4">
+                                    <button onClick={() => setShowEditModal(false)} className="flex-1 px-4 py-3 border border-white/10 text-gray-400 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all">ABORTAR</button>
+                                    <button onClick={handleUpdateLog} className="flex-1 px-4 py-3 bg-blue-500 text-black font-black text-[10px] uppercase tracking-widest hover:bg-blue-400 transition-all shadow-lg active:scale-95">SALVAR_ALTERAÇÃO</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Delete Modal */}
+                {showDeleteModal && (
+                    <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-md">
+                        <div className="bg-black/80 backdrop-blur-2xl border-2 border-red-500/30 shadow-[0_0_50px_rgba(239,68,68,0.2)] w-full max-w-md overflow-hidden animate-fade-in relative">
+                            <div className="bg-red-500/10 px-8 py-5 border-b border-white/5 flex justify-between items-center text-white">
+                                <div>
+                                    <h3 className="font-black uppercase tracking-[0.3em] text-xs text-red-500">Exclusão_de_Registro</h3>
+                                    <p className="text-[9px] font-mono text-red-500/40 uppercase mt-1">SISTEMA_SEGURANÇA_V1.0</p>
+                                </div>
+                                <button onClick={() => setShowDeleteModal(false)} className="text-white/50 hover:text-red-500 font-bold text-2xl transition-colors">&times;</button>
+                            </div>
+
+                            <div className="p-8 space-y-6">
+                                <div className="bg-red-500/5 border border-red-500/10 p-4">
+                                    <p className="text-[10px] text-red-500/70 font-mono uppercase tracking-widest text-center">
+                                        Esta ação é irreversível. O registro será removido do banco de dados principal.
+                                    </p>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="block text-[10px] font-black text-red-500/50 uppercase tracking-[0.2em] pl-1">Motivo da Exclusão *</label>
+                                    <textarea
+                                        required
+                                        className="w-full bg-white/5 border border-white/10 p-3 focus:border-red-500 outline-none font-mono text-[10px] text-white h-24 uppercase"
+                                        placeholder="JUSTIFICATIVA OBRIGATÓRIA PARA EXCLUSÃO"
+                                        value={auditReason}
+                                        onChange={e => setAuditReason(e.target.value)}
+                                    ></textarea>
+                                </div>
+                                <div className="flex gap-4 pt-4">
+                                    <button onClick={() => setShowDeleteModal(false)} className="flex-1 px-4 py-3 border border-white/10 text-gray-400 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all">ABORTAR</button>
+                                    <button onClick={handleDeleteLog} className="flex-1 px-4 py-3 bg-red-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-red-500 transition-all shadow-lg active:scale-95">CONFIRMAR_EXCLUSÃO</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Status/Vacation Modal */}
+                {showStatusModal && (
+                    <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-md">
+                        <div className="bg-black/60 backdrop-blur-2xl border-2 border-white/10 shadow-2xl w-full max-w-md overflow-hidden animate-fade-in relative">
+                            <div className="bg-emerald-500/10 px-8 py-5 border-b border-white/5 flex justify-between items-center text-white">
+                                <div>
+                                    <h3 className="font-black uppercase tracking-[0.3em] text-xs text-emerald-500">Gestão de Status e Ausência</h3>
+                                    <p className="text-[9px] font-mono text-emerald-500/40 uppercase mt-1">{selectedEmp?.name}</p>
+                                </div>
+                                <button onClick={() => setShowStatusModal(false)} className="text-white/50 hover:text-emerald-500 font-bold text-2xl transition-colors">&times;</button>
+                            </div>
+
+                            <form onSubmit={handleUpdateStatus} className="p-8 space-y-6">
+                                <div className="space-y-4">
+                                    <div className="space-y-2">
+                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Tipo de Status</label>
+                                        <select
+                                            className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xs text-white uppercase appearance-none"
+                                            value={statusData.type}
+                                            onChange={e => setStatusData({ ...statusData, type: e.target.value })}
+                                        >
+                                            <option value="ativo" className="bg-gray-900">ATIVO / EM CAMPO</option>
+                                            <option value="ferias" className="bg-gray-900">EM FÉRIAS</option>
+                                            <option value="afastado" className="bg-gray-900">AFASTADO (MÉDICO/OUTROS)</option>
+                                        </select>
+                                    </div>
+
+                                    {statusData.type !== 'ativo' && (
+                                        <div className="grid grid-cols-2 gap-4 animate-fade-in">
+                                            <div className="space-y-2">
+                                                <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Início</label>
+                                                <input
+                                                    type="date"
+                                                    required
+                                                    className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xs text-white"
+                                                    value={statusData.start}
+                                                    onChange={e => setStatusData({ ...statusData, start: e.target.value })}
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Fim</label>
+                                                <input
+                                                    type="date"
+                                                    required
+                                                    className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xs text-white"
+                                                    value={statusData.end}
+                                                    onChange={e => setStatusData({ ...statusData, end: e.target.value })}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <button type="submit" className="w-full bg-emerald-500 text-black py-4 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-400 transition-all shadow-lg active:scale-95">
+                                    ATUALIZAR_STATUS_OPERADOR
+                                </button>
                             </form>
                         </div>
                     </div>
@@ -398,22 +1011,21 @@ const AdminDashboard = () => {
                                 </button>
                             </div>
                             <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-4 py-2 border border-white/5">
-                                <p className="text-[10px] font-mono text-emerald-500 font-black uppercase tracking-[0.2em]">Registro_Visual_Validado</p>
+                                <p className="text-[10px] font-mono text-emerald-500 font-black uppercase tracking-[0.2em]">Registro Visual Validado</p>
                             </div>
                         </div>
                     </div>
                 )}
-
                 {/* Header */}
                 <header className="bg-black/40 backdrop-blur-xl border-b border-white/5 sticky top-0 z-40">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
                         <div className="flex justify-between items-center">
                             <div>
-                                <h1 className="text-2xl font-black text-white tracking-tighter uppercase italic">
+                                <h1 className="text-xl sm:text-2xl font-black text-white tracking-tighter uppercase italic">
                                     🌱 Sistema de <span className="text-emerald-500">Ponto</span>
                                 </h1>
-                                <p className="text-[10px] font-mono text-gray-400 mt-1 uppercase tracking-widest">
-                                    Módulo_Administrativo // {currentUser?.name || 'ADMIN'}
+                                <p className="text-[8px] sm:text-[10px] font-mono text-gray-400 mt-1 uppercase tracking-widest">
+                                    Módulo Administrativo // {currentUser?.name || 'ADMIN'}
                                 </p>
                             </div>
                             <div className="flex items-center gap-3">
@@ -432,7 +1044,7 @@ const AdminDashboard = () => {
                 {/* Navigation Tabs */}
                 <div className="bg-black/20 backdrop-blur-md border-b border-white/5 sticky top-[73px] z-30">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                        <nav className="flex space-x-8">
+                        <nav className="flex space-x-8 overflow-x-auto scrollbar-hide no-scrollbar">
                             {[
                                 { id: 'overview', label: 'Visão Geral', icon: '📊' },
                                 { id: 'employees', label: 'Funcionários', icon: '👥' },
@@ -442,7 +1054,7 @@ const AdminDashboard = () => {
                                 <button
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
-                                    className={`py-4 px-1 border-b-2 font-black text-[10px] uppercase tracking-widest transition-all ${activeTab === tab.id
+                                    className={`py-4 px-1 border-b-2 font-black text-[10px] uppercase tracking-widest transition-all transition-colors whitespace-nowrap min-w-max flex items-center ${activeTab === tab.id
                                         ? 'border-emerald-500 text-emerald-500'
                                         : 'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-700'
                                         }`}
@@ -456,9 +1068,25 @@ const AdminDashboard = () => {
                 </div>
 
                 {/* Content */}
-                <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                <main className="flex-1 p-4 sm:p-8 overflow-y-auto">
+                    {/* Alerta de Setup Pendente */}
+                    {!currentCompany && userRole === 'admin' && (
+                        <div className="mb-8 bg-amber-500/10 border border-amber-500/30 p-6 rounded-lg flex items-center justify-between animate-pulse">
+                            <div>
+                                <h3 className="text-amber-500 font-black uppercase text-sm tracking-widest mb-1">⚠️ Organização Não Configurada</h3>
+                                <p className="text-[10px] text-gray-400 font-mono uppercase">Você precisa concluir o perfil da empresa para liberar o sistema.</p>
+                            </div>
+                            <button
+                                onClick={() => setShowCompanySetup(true)}
+                                className="px-6 py-3 bg-amber-500 text-black font-black text-[10px] uppercase tracking-widest hover:bg-amber-400 transition-all shadow-lg"
+                            >
+                                Configurar Agora
+                            </button>
+                        </div>
+                    )}
+
                     {activeTab === 'overview' && (
-                        <div className="space-y-6 animate-fade-in">
+                        <div className="space-y-8 animate-fade-in">
                             <div className="flex justify-between items-end">
                                 <h2 className="text-2xl font-black text-white tracking-tight uppercase border-l-4 border-emerald-500 pl-4">
                                     Status da Operação
@@ -468,72 +1096,115 @@ const AdminDashboard = () => {
                                 </p>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-6 shadow-2xl">
-                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Funcionários Ativos</p>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-4 sm:p-6 rounded-2xl shadow-2xl">
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 sm:mb-2">Funcionários Ativos</p>
                                     <div className="flex items-baseline gap-2">
-                                        <span className="text-4xl font-black text-white">{employees.length}</span>
-                                        <span className="text-[10px] font-bold text-emerald-500">UNIDADES</span>
+                                        <span className="text-2xl sm:text-4xl font-black text-white">{employees.length}</span>
+                                        <span className="text-[8px] sm:text-[10px] font-bold text-emerald-500">UNIDADES</span>
                                     </div>
                                 </div>
 
-                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-6 shadow-2xl">
-                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Presentes Agora</p>
+                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-4 sm:p-6 rounded-2xl shadow-2xl">
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 sm:mb-2">Presentes Agora</p>
                                     <div className="flex items-baseline gap-2">
-                                        <span className="text-4xl font-black text-emerald-500">{stats.present}</span>
-                                        <span className="text-[10px] font-bold text-emerald-500">EM CAMPO</span>
+                                        <span className="text-2xl sm:text-4xl font-black text-emerald-500">{stats.present}</span>
+                                        <span className="text-[8px] sm:text-[10px] font-bold text-emerald-500">EM CAMPO</span>
                                     </div>
                                 </div>
 
-                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-6 shadow-2xl border-l-orange-500">
-                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Justificativas</p>
+                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-4 sm:p-6 rounded-2xl shadow-2xl border-l-orange-500">
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 sm:mb-2">Saídas Eventuais</p>
                                     <div className="flex items-baseline gap-2">
-                                        <span className="text-4xl font-black text-orange-500">{stats.justifications}</span>
-                                        <span className="text-[10px] font-bold text-orange-500">PENDENTES</span>
+                                        <span className="text-2xl sm:text-4xl font-black text-orange-500">{stats.eventuals}</span>
+                                        <span className="text-[8px] sm:text-[10px] font-bold text-orange-500">HOJE</span>
                                     </div>
                                 </div>
 
-                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-6 shadow-2xl">
-                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Sincronização</p>
+                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-4 sm:p-6 rounded-2xl shadow-2xl">
+                                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 sm:mb-2">Sincronização</p>
                                     <div className="flex items-center gap-2 mt-2">
-                                        <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
-                                        <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Estável</span>
+                                        <div className="w-1.5 sm:w-2 h-1.5 sm:h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+                                        <span className="text-[9px] sm:text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Estável</span>
                                     </div>
                                 </div>
                             </div>
 
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 overflow-hidden shadow-2xl">
+                                <div className="bg-black/40 backdrop-blur-xl border border-white/5 rounded-2xl overflow-hidden shadow-2xl">
                                     <div className="bg-emerald-500/10 border-b border-emerald-500/20 text-emerald-500 px-4 py-2 flex justify-between items-center">
                                         <span className="text-[10px] font-black uppercase tracking-widest">Últimas Ocorrências</span>
                                         <span className="text-[10px] font-mono opacity-50">LOG_SYSTEM_V.1.0</span>
                                     </div>
                                     <div className="p-0 divide-y divide-white/5">
-                                        {recentLogs.length > 0 ? recentLogs.map(log => (
-                                            <div key={log.id} className="px-4 py-3 hover:bg-white/5 flex items-center justify-between transition-colors">
-                                                <div className="flex items-center gap-3">
-                                                    <div className={`w-1 h-8 ${log.type === 'entrada' ? 'bg-emerald-500' : 'bg-red-500/50'}`}></div>
-                                                    <div>
-                                                        <p className="text-sm font-bold text-white uppercase tracking-tight">
-                                                            {log.type === 'entrada' ? '🌅 Entrada' :
-                                                                log.type === 'saida_almoco' ? '🍽️ Saída Almoço' :
-                                                                    log.type === 'volta_almoco' ? '↩️ Volta Almoço' : '🌙 Saída'}
-                                                        </p>
-                                                        <p className="text-[10px] text-gray-400 font-mono">
-                                                            {log.userName} • {log.timestamp?.toDate().toLocaleTimeString('pt-BR')}
-                                                        </p>
+                                        {recentLogs.length > 0 ? recentLogs.map((log, idx) => {
+                                            const isOutside = log.location && calculateDistance(log.location.latitude, log.location.longitude, geofence.latitude, geofence.longitude) > geofence.radius;
+                                            const employeeName = log.userName || 'N/A';
+                                            const initials = employeeName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+
+                                            return (
+                                                <div key={log.id} className="group px-6 py-4 hover:bg-white/[0.03] flex items-center justify-between transition-all duration-300">
+                                                    <div className="flex items-center gap-4">
+                                                        {/* Avatar Circle */}
+                                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-[10px] border-2 transition-all group-hover:scale-110 ${isOutside ? 'border-red-500/30 bg-red-500/5 text-red-500 shadow-[0_0_15px_rgba(239,68,68,0.1)]' : 'border-emerald-500/30 bg-emerald-500/5 text-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.1)]'
+                                                            }`}>
+                                                            {initials}
+                                                        </div>
+
+                                                        <div>
+                                                            <div className="flex items-center gap-2">
+                                                                <p className="text-[11px] font-black text-white uppercase tracking-tight leading-none">
+                                                                    {employeeName}
+                                                                </p>
+                                                                <span className={`w-1.5 h-1.5 rounded-full ${isOutside ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`}></span>
+                                                            </div>
+                                                            <div className="flex items-center gap-2 mt-1">
+                                                                <span className="text-[9px] font-mono text-gray-500 uppercase tracking-widest">
+                                                                    {log.type === 'entrada' ? '🌅 Entrada' :
+                                                                        log.type === 'saida_almoco' ? '🍽️ Almoço' :
+                                                                            log.type === 'volta_almoco' ? '↩️ Retorno' : '🌙 Saída'}
+                                                                </span>
+                                                                <span className="text-[9px] text-gray-600 font-mono">•</span>
+                                                                <span className="text-[10px] text-emerald-500/80 font-black font-mono">
+                                                                    {log.timestamp?.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="text-right flex flex-col items-end gap-1">
+                                                            <span className={`text-[8px] font-black uppercase tracking-[0.2em] px-2 py-0.5 rounded-sm border ${isOutside
+                                                                ? 'text-red-500 bg-red-500/10 border-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.15)]'
+                                                                : 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
+                                                                }`}>
+                                                                {isOutside ? 'FORA_PERÍMETRO' : 'OK_AUTORIZADO'}
+                                                            </span>
+                                                            {isOutside && (
+                                                                <p className="text-[8px] font-mono text-gray-600 italic uppercase">
+                                                                    Dist: {Math.round(calculateDistance(log.location.latitude, log.location.longitude, geofence.latitude, geofence.longitude))}m
+                                                                </p>
+                                                            )}
+                                                        </div>
+
+                                                        {log.photo && (
+                                                            <button
+                                                                onClick={() => setPreviewPhoto(log.photo)}
+                                                                className="w-8 h-8 rounded-lg border border-white/5 bg-white/5 hover:bg-emerald-500/20 hover:border-emerald-500/30 flex items-center justify-center transition-all group-hover:shadow-[0_0_20px_rgba(16,185,129,0.1)] active:scale-90"
+                                                                title="Visualizar Auditoria Facial"
+                                                            >
+                                                                <span className="text-xs">📸</span>
+                                                            </button>
+                                                        )}
                                                     </div>
                                                 </div>
-                                                <span className={`text-[9px] font-black uppercase tracking-tighter border px-2 py-0.5 ${log.location && calculateDistance(log.location.latitude, log.location.longitude, geofence.latitude, geofence.longitude) > geofence.radius
-                                                    ? 'text-red-500 bg-red-500/10 border-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.2)]'
-                                                    : 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
-                                                    }`}>
-                                                    {log.location && calculateDistance(log.location.latitude, log.location.longitude, geofence.latitude, geofence.longitude) > geofence.radius ? 'FORA_PERÍMETRO' : 'OK'}
-                                                </span>
-                                            </div>
-                                        )) : (
-                                            <div className="p-12 text-center text-gray-600 font-mono text-xs uppercase italic tracking-widest">
-                                                Nenhum registro recente detectado
+                                            );
+                                        }) : (
+                                            <div className="p-16 text-center">
+                                                <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center mx-auto mb-4 opacity-20">📡</div>
+                                                <p className="text-[10px] font-black text-gray-600 uppercase tracking-[0.3em] font-mono italic">
+                                                    Aguardando_Sincronização_Operacional...
+                                                </p>
                                             </div>
                                         )}
                                     </div>
@@ -544,13 +1215,13 @@ const AdminDashboard = () => {
                                         <div className="w-12 h-12 border-t border-r border-emerald-500/20"></div>
                                     </div>
                                     <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-500/50 mb-6 italic">Acesso_Rápido // Operações</h3>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <button onClick={() => setActiveTab('reports')} className="group bg-white/5 border border-white/10 p-5 text-left hover:border-emerald-500/50 hover:bg-white/10 transition-all shadow-lg active:scale-95">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <button onClick={() => setActiveTab('reports')} className="group bg-white/5 border border-white/10 p-5 rounded-xl text-left hover:border-emerald-500/50 hover:bg-white/10 transition-all shadow-lg active:scale-95">
                                             <p className="text-2xl mb-2 group-hover:scale-110 transition-transform">📄</p>
                                             <p className="text-xs font-black text-white uppercase leading-none tracking-tight">Exportar Folha</p>
                                             <p className="text-[10px] text-gray-400 mt-2 font-mono uppercase tracking-widest">PDF_Download</p>
                                         </button>
-                                        <button onClick={() => setShowRegisterModal(true)} className="group bg-white/5 border border-white/10 p-5 text-left hover:border-emerald-500/50 hover:bg-white/10 transition-all shadow-lg active:scale-95">
+                                        <button onClick={() => setShowRegisterModal(true)} className="group bg-white/5 border border-white/10 p-5 rounded-xl text-left hover:border-emerald-500/50 hover:bg-white/10 transition-all shadow-lg active:scale-95">
                                             <p className="text-2xl mb-2 group-hover:scale-110 transition-transform">➕</p>
                                             <p className="text-xs font-black text-white uppercase leading-none tracking-tight">Novo Registro</p>
                                             <p className="text-[10px] text-gray-400 mt-2 font-mono uppercase tracking-widest">Add_Employee</p>
@@ -589,8 +1260,8 @@ const AdminDashboard = () => {
 
                             {/* Employee List */}
                             <div className="bg-black/40 backdrop-blur-xl border border-white/5 shadow-2xl overflow-hidden">
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-left font-mono text-[10px] uppercase tracking-wider">
+                                <div className="overflow-x-auto no-scrollbar">
+                                    <table className="w-full text-left font-mono text-[10px] uppercase tracking-wider min-w-[700px]">
                                         <thead>
                                             <tr className="bg-emerald-500/10 text-emerald-500 border-b border-white/5">
                                                 <th className="px-6 py-4 font-black">Colaborador</th>
@@ -625,15 +1296,45 @@ const AdminDashboard = () => {
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap">
                                                         <div className="flex items-center gap-2">
-                                                            <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(16,185,129,0.5)]"></div>
-                                                            <span className="text-[9px] font-black text-emerald-500/80 uppercase tracking-widest">Sincronizado</span>
+                                                            {(!emp.status || emp.status === 'ativo') ? (
+                                                                <>
+                                                                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(16,185,129,0.5)]"></div>
+                                                                    <span className="text-[9px] font-black text-emerald-500/80 uppercase tracking-widest">Ativo</span>
+                                                                </>
+                                                            ) : emp.status === 'ferias' ? (
+                                                                <>
+                                                                    <div className="w-1.5 h-1.5 bg-blue-500 rounded-full shadow-[0_0_5px_rgba(59,130,246,0.5)]"></div>
+                                                                    <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest">Em Férias</span>
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <div className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_5px_rgba(249,115,22,0.5)]"></div>
+                                                                    <span className="text-[9px] font-black text-orange-500 uppercase tracking-widest">Afastado</span>
+                                                                </>
+                                                            )}
                                                         </div>
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                         <div className="flex justify-end gap-2 opacity-20 group-hover:opacity-100 transition-opacity">
                                                             <button
+                                                                onClick={() => {
+                                                                    setSelectedEmp(emp);
+                                                                    setStatusData({
+                                                                        type: emp.status || 'ativo',
+                                                                        start: emp.statusStart || '',
+                                                                        end: emp.statusEnd || ''
+                                                                    });
+                                                                    setShowStatusModal(true);
+                                                                }}
+                                                                title="Gerenciar Status/Ausência"
+                                                                className="p-2 border border-white/10 hover:border-emerald-500/50 hover:bg-emerald-500/5 text-emerald-500/70 transition-all font-bold text-xs"
+                                                            >
+                                                                🏖️
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleResetPassword(emp)}
                                                                 title="Resetar Senha"
-                                                                className="p-2 border border-white/10 hover:border-white/30 hover:bg-white/5 text-gray-400 transition-all"
+                                                                className="p-2 border border-white/10 hover:border-white/30 hover:bg-white/5 text-gray-400 transition-all active:scale-90"
                                                             >
                                                                 🔑
                                                             </button>
@@ -690,7 +1391,7 @@ const AdminDashboard = () => {
                                         </div>
                                     </div>
                                     <div className="w-full md:w-72 space-y-2">
-                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Filtrar_Colaborador</label>
+                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Filtrar Colaborador</label>
                                         <select
                                             value={reportFilters.employeeId}
                                             onChange={(e) => setReportFilters(prev => ({ ...prev, employeeId: e.target.value }))}
@@ -705,17 +1406,17 @@ const AdminDashboard = () => {
                                     <button
                                         onClick={handleGenerateReport}
                                         disabled={isGeneratingReport}
-                                        className="bg-emerald-500 text-black py-[14px] w-full md:w-40 px-8 flex items-center justify-center gap-2 font-black text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-400 transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)]"
+                                        className="bg-emerald-500 text-black py-[14px] w-full md:w-40 px-8 flex items-center justify-center gap-2 font-black text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-400 transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)] rounded-sm"
                                     >
                                         {isGeneratingReport ? (
                                             <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
-                                        ) : 'FILTRAR_LOGS'}
+                                        ) : 'FILTRAR LOGS'}
                                     </button>
                                 </div>
 
                                 <div className="border-t border-white/5 pt-10 flex justify-between items-center mb-10">
                                     <div>
-                                        <p className="text-[10px] font-black text-emerald-500/30 uppercase tracking-[0.3em]">Query_Response</p>
+                                        <p className="text-[10px] font-black text-emerald-500/30 uppercase tracking-[0.3em]">Resposta Sistema</p>
                                         <p className="text-sm font-mono text-white mt-1 uppercase tracking-tight">
                                             {reportData.length} registros sincronizados.
                                         </p>
@@ -726,24 +1427,41 @@ const AdminDashboard = () => {
                                             disabled={reportData.length === 0}
                                             className="px-6 py-2 border border-white/10 text-white text-[9px] font-black uppercase tracking-widest hover:bg-white/5 hover:border-white/30 transition-all disabled:opacity-20"
                                         >
-                                            Exportar_PDF
+                                            Exportar PDF
                                         </button>
                                         <button
                                             onClick={handleExportCSV}
                                             disabled={reportData.length === 0}
                                             className="px-6 py-2 border border-white/10 text-white text-[9px] font-black uppercase tracking-widest hover:bg-white/5 hover:border-white/30 transition-all disabled:opacity-20"
                                         >
-                                            CSV_EXCEL
+                                            CSV EXCEL
                                         </button>
                                     </div>
                                 </div>
+
+                                {reportData.length > 0 && (
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 animate-fade-in">
+                                        <div className="bg-emerald-500/5 border border-emerald-500/10 p-5 rounded-2xl shadow-lg">
+                                            <p className="text-[9px] font-black text-emerald-500/60 uppercase tracking-widest mb-1">Total Registros</p>
+                                            <p className="text-2xl font-black text-white italic">{reportData.length}</p>
+                                        </div>
+                                        <div className="bg-orange-500/5 border border-orange-500/10 p-5 rounded-2xl shadow-lg">
+                                            <p className="text-[9px] font-black text-orange-500/60 uppercase tracking-widest mb-1">Saídas Eventuais</p>
+                                            <p className="text-2xl font-black text-white italic">{reportData.filter(p => p.type === 'saida_eventual').length}</p>
+                                        </div>
+                                        <div className="bg-emerald-500/10 border border-emerald-500/20 p-5 rounded-2xl shadow-lg">
+                                            <p className="text-[9px] font-black text-emerald-500 uppercase tracking-widest mb-1">Abonos Realizados</p>
+                                            <p className="text-2xl font-black text-white italic">{reportData.filter(p => p.isAbonado).length}</p>
+                                        </div>
+                                    </div>
+                                )}
 
                                 {reportData.length > 0 ? (
                                     <div className="space-y-12">
                                         <div className="bg-emerald-500/5 p-8 border border-emerald-500/10 shadow-inner">
                                             <h3 className="text-emerald-500 text-[10px] font-black uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
                                                 <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-                                                Resumo de Horas_Líquidas
+                                                Resumo de Horas Líquidas
                                             </h3>
                                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                                 {calculateWorkedHoursSummary(reportData).map((summary, idx) => (
@@ -761,17 +1479,19 @@ const AdminDashboard = () => {
                                             </div>
                                         </div>
 
-                                        <div className="overflow-x-auto shadow-2xl">
+                                        <div className="overflow-x-auto shadow-2xl no-scrollbar">
                                             <h3 className="text-gray-400 text-[10px] font-black uppercase tracking-[0.3em] mb-6 italic">Log_Detalhado_Full_Audit</h3>
-                                            <table className="w-full text-left font-mono text-[9px] uppercase tracking-widest">
+                                            <table className="w-full text-left font-mono text-[9px] uppercase tracking-widest min-w-[1000px]">
                                                 <thead>
-                                                    <tr className="bg-white/5 text-emerald-500/50">
-                                                        <th className="px-5 py-4 font-black">Data_Stamp</th>
+                                                    <tr className="bg-emerald-500/10 text-emerald-500 border-b border-white/5">
+                                                        <th className="px-5 py-4 font-black">Data</th>
                                                         <th className="px-5 py-4 font-black">Operador</th>
-                                                        <th className="px-5 py-4 font-black">Tipo_Alt</th>
-                                                        <th className="px-5 py-4 font-black">Time_ISO</th>
-                                                        <th className="px-5 py-4 font-black">Geofence (m)</th>
-                                                        <th className="px-5 py-4 text-right font-black">Audit_Media</th>
+                                                        <th className="px-5 py-4 font-black">Tipo</th>
+                                                        <th className="px-5 py-4 font-black">Hora</th>
+                                                        <th className="px-5 py-4 font-black">Perímetro</th>
+                                                        <th className="px-5 py-4 font-black text-center">Mídia</th>
+                                                        <th className="px-5 py-4 font-black">Justificativa</th>
+                                                        <th className="px-5 py-4 text-right font-black">Ações</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-white/5 text-gray-400">
@@ -794,15 +1514,61 @@ const AdminDashboard = () => {
                                                                     </div>
                                                                 ) : '---'}
                                                             </td>
+                                                            <td className="px-5 py-4">
+                                                                <div className="flex justify-center gap-2">
+                                                                    {log.photo && (
+                                                                        <button
+                                                                            onClick={() => setPreviewPhoto(log.photo)}
+                                                                            className="w-8 h-8 border border-white/10 hover:border-emerald-500/50 flex items-center justify-center transition-all group-hover:scale-110"
+                                                                            title="Ver Foto"
+                                                                        >
+                                                                            🖼️
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-5 py-4">
+                                                                <div className="max-w-[150px] truncate text-[9px] text-gray-500 italic uppercase" title={log.justification}>
+                                                                    {log.justification || '---'}
+                                                                </div>
+                                                            </td>
                                                             <td className="px-5 py-4 text-right">
-                                                                {log.photo && (
+                                                                <div className="flex justify-end gap-2">
+                                                                    {log.type === 'saida_eventual' && (
+                                                                        <button
+                                                                            onClick={() => handleAbonoToggle(log)}
+                                                                            className={`px-3 py-1 rounded-sm text-[8px] font-black uppercase tracking-widest transition-all ${log.isAbonado ? 'bg-emerald-500 text-black shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 text-gray-400 border border-white/10 hover:bg-emerald-500/10 hover:text-emerald-500'}`}
+                                                                        >
+                                                                            {log.isAbonado ? '✓ Abonado' : 'Abonar?'}
+                                                                        </button>
+                                                                    )}
                                                                     <button
-                                                                        onClick={() => setPreviewPhoto(log.photo)}
-                                                                        className="w-10 h-10 border border-white/10 hover:border-emerald-500/50 flex items-center justify-center transition-all group-hover:scale-110"
+                                                                        onClick={() => {
+                                                                            setAuditLog(log);
+                                                                            const ts = log.timestamp?.toDate() || new Date();
+                                                                            setEditData({
+                                                                                type: log.type,
+                                                                                time: ts.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+                                                                                date: log.date
+                                                                            });
+                                                                            setShowEditModal(true);
+                                                                        }}
+                                                                        className="w-8 h-8 border border-white/10 hover:border-blue-500/50 flex items-center justify-center transition-all hover:bg-blue-500/10"
+                                                                        title="Editar Registro"
                                                                     >
-                                                                        🖼️
+                                                                        ✏️
                                                                     </button>
-                                                                )}
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            setAuditLog(log);
+                                                                            setShowDeleteModal(true);
+                                                                        }}
+                                                                        className="w-8 h-8 border border-white/10 hover:border-red-500/50 flex items-center justify-center transition-all hover:bg-red-500/10"
+                                                                        title="Excluir Registro"
+                                                                    >
+                                                                        🗑️
+                                                                    </button>
+                                                                </div>
                                                             </td>
                                                         </tr>
                                                     ))}
@@ -814,7 +1580,7 @@ const AdminDashboard = () => {
                                     <div className="bg-black/20 border border-dashed border-white/5 py-24 text-center">
                                         <p className="text-6xl mb-6 opacity-10">📊</p>
                                         <p className="text-xs font-black text-gray-600 uppercase tracking-[0.4em] italic">
-                                            {isGeneratingReport ? 'Synchronizing_Cloud_Data...' : 'Aguardando_Critérios_de_Busca'}
+                                            {isGeneratingReport ? 'Synchronizing Cloud Data...' : 'Aguardando Critérios de Busca'}
                                         </p>
                                     </div>
                                 )}
@@ -822,14 +1588,14 @@ const AdminDashboard = () => {
                         </div>
                     )}
                     {activeTab === 'settings' && (
-                        <div className="space-y-6 animate-fade-in">
-                            <div className="flex justify-between items-end">
-                                <h2 className="text-2xl font-black text-white tracking-tight uppercase border-l-4 border-emerald-500 pl-4">
+                        <div className="space-y-6 animate-fade-in px-0 sm:px-0">
+                            <div className="flex justify-between items-end mb-4">
+                                <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight uppercase border-l-4 border-emerald-500 pl-4">
                                     Configurações do Sistema
                                 </h2>
                             </div>
 
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 items-start">
                                 <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-8 shadow-2xl space-y-8">
                                     <div>
                                         <h3 className="text-emerald-500 text-[10px] font-black uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
@@ -912,27 +1678,247 @@ const AdminDashboard = () => {
                                     </div>
                                 </div>
 
-                                <div className="bg-emerald-500/5 border border-emerald-500/10 p-8 shadow-inner">
-                                    <h3 className="text-gray-400 text-[10px] font-black uppercase tracking-[0.3em] mb-6 italic">Instruções_de_Configuração</h3>
-                                    <div className="space-y-6 text-gray-400 font-mono text-[10px] uppercase tracking-widest leading-relaxed">
-                                        <p>
-                                            <span className="text-emerald-500 font-black">[!]</span> O Geofencing define a "Cerca Virtual" onde os colaboradores são autorizados a registrar o ponto.
-                                        </p>
-                                        <p>
-                                            <span className="text-emerald-500 font-black">[!]</span> Batidas fora do raio definido serão marcadas com um alerta vermelho nos relatórios para auditoria.
-                                        </p>
-                                        <p>
-                                            <span className="text-emerald-500 font-black">[!]</span> Para maior precisão, o administrador deve estar fisicamente no centro da estufa ao clicar em "CAPTURAR LOCALIZAÇÃO".
-                                        </p>
-                                        <div className="pt-6 border-t border-white/5">
-                                            <p className="text-[8px] opacity-50">SISTEMA_V_1.0 // AUDIT_READY</p>
-                                        </div>
+                                <div className="space-y-8">
+                                    <div className="bg-black/40 backdrop-blur-xl border border-white/5 p-8 shadow-2xl relative overflow-hidden group">
+                                        <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-500/5 rounded-bl-full -mr-10 -mt-10 transition-all group-hover:bg-emerald-500/10"></div>
+
+                                        <h3 className="text-emerald-500 text-[10px] font-black uppercase tracking-[0.3em] mb-6 flex items-center gap-2 relative z-10">
+                                            <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
+                                            Perfil da Organização
+                                        </h3>
+
+                                        <form onSubmit={handleSaveCompany} className="space-y-6 relative z-10">
+
+                                            <div className="bg-emerald-500/5 p-4 border border-emerald-500/20 rounded-sm mb-6">
+                                                <label className="block text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-1">Código Corporativo</label>
+                                                <div className="text-2xl font-mono text-white font-black tracking-widest select-all">
+                                                    {currentCompany?.loginCode || "PENDENTE"}
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-4">
+                                                <div>
+                                                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1">Nome Fantasia</label>
+                                                    <input
+                                                        type="text"
+                                                        value={companyForm.name}
+                                                        onChange={(e) => setCompanyForm({ ...companyForm, name: e.target.value })}
+                                                        className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none text-white font-mono text-xs uppercase"
+                                                        placeholder="MINHA EMPRESA"
+                                                    />
+                                                </div>
+
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1">CNPJ</label>
+                                                        <input
+                                                            type="text"
+                                                            maxLength={18}
+                                                            value={companyForm.cnpj || ''}
+                                                            onChange={(e) => setCompanyForm({ ...companyForm, cnpj: formatCNPJ(e.target.value) })}
+                                                            className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none text-white font-mono text-xs uppercase"
+                                                            placeholder="00.000.000/0001-00"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1">Telefone</label>
+                                                        <input
+                                                            type="text"
+                                                            value={companyForm.phone || ''}
+                                                            onChange={(e) => setCompanyForm({ ...companyForm, phone: e.target.value })}
+                                                            className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none text-white font-mono text-xs uppercase"
+                                                            placeholder="(00) 00000-0000"
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1">Escala</label>
+                                                    <select
+                                                        value={companyForm.workSchedule || 'monday_friday'}
+                                                        onChange={(e) => setCompanyForm({ ...companyForm, workSchedule: e.target.value })}
+                                                        className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none text-white font-mono text-xs uppercase appearance-none cursor-pointer"
+                                                    >
+                                                        <option value="monday_friday" className="bg-gray-900">Segunda a Sexta</option>
+                                                        <option value="monday_saturday" className="bg-gray-900">Segunda a Sábado</option>
+                                                        <option value="monday_sunday" className="bg-gray-900">Todos os Dias</option>
+                                                    </select>
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1">Endereço</label>
+                                                    <input
+                                                        type="text"
+                                                        value={companyForm.address || ''}
+                                                        onChange={(e) => setCompanyForm({ ...companyForm, address: e.target.value })}
+                                                        className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none text-white font-mono text-xs uppercase"
+                                                        placeholder="ENDEREÇO COMPLETO"
+                                                    />
+                                                </div>
+
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1">Jornada (h)</label>
+                                                        <input
+                                                            type="number"
+                                                            value={companyForm.workHours}
+                                                            onChange={(e) => setCompanyForm({ ...companyForm, workHours: e.target.value })}
+                                                            className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none text-white font-mono text-xs uppercase"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1">Status</label>
+                                                        <div className="w-full bg-white/5 border border-white/10 p-3 text-emerald-500 font-mono text-xs uppercase flex items-center gap-2">
+                                                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                                                            ATIVO
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <button
+                                                type="submit"
+                                                className="w-full py-4 bg-emerald-600 text-black font-black text-[10px] uppercase tracking-[0.3em] hover:bg-emerald-500 transition-all shadow-lg"
+                                            >
+                                                Salvar Perfil
+                                            </button>
+                                        </form>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     )}
                 </main>
+
+                {/* MODAL DE CONFIGURAÇÃO INICIAL DA EMPRESA (BLOQUEANTE) */}
+                {showCompanySetup && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md p-4 animate-fade-in">
+                        <div className="bg-gray-900 border border-emerald-500/30 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-[0_0_50px_rgba(16,185,129,0.1)] rounded-sm relative">
+                            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-emerald-500 to-transparent animate-pulse"></div>
+                            <div className="bg-emerald-500/10 border-b border-emerald-500/20 p-8 text-center">
+                                <h2 className="text-2xl font-black text-white uppercase tracking-tighter flex items-center justify-center gap-3 mb-2">
+                                    <span className="text-emerald-500 animate-bounce">⚡</span> Configuração _Inicial
+                                </h2>
+                                <p className="text-[10px] text-emerald-500/60 font-mono uppercase tracking-[0.2em]">
+                                    Identificação da Organização Obrigatória
+                                </p>
+                            </div>
+
+                            <form onSubmit={handleSaveCompany} className="p-8 space-y-8">
+                                <div className="bg-emerald-500/5 p-6 border border-emerald-500/20 rounded-sm">
+                                    <label className="block text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-2 text-center">Seu Código de Acesso Corporativo</label>
+                                    <div className="text-4xl font-mono text-white font-black tracking-widest text-center select-all">
+                                        {currentCompany?.loginCode || "GERADO APÓS SALVAR"}
+                                    </div>
+                                    <p className="text-[9px] text-gray-500 mt-3 text-center uppercase tracking-widest">Este código vinculará todos os seus colaboradores</p>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1">Nome Fantasia</label>
+                                        <input
+                                            type="text"
+                                            required
+                                            className="w-full bg-white/5 border border-white/10 p-4 focus:border-emerald-500 outline-none text-white font-mono text-sm uppercase transition-all"
+                                            placeholder="MINHA ORGANIZAÇÃO LTDA"
+                                            value={companyForm.name}
+                                            onChange={(e) => setCompanyForm({ ...companyForm, name: e.target.value })}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1">CNPJ</label>
+                                        <input
+                                            type="text"
+                                            maxLength={18}
+                                            value={companyForm.cnpj || ""}
+                                            onChange={(e) => setCompanyForm({ ...companyForm, cnpj: formatCNPJ(e.target.value) })}
+                                            className="w-full bg-white/5 border border-white/10 p-4 focus:border-emerald-500 outline-none text-white font-mono text-sm uppercase transition-all"
+                                            placeholder="00.000.000/0001-00"
+                                        />
+                                    </div>
+                                </div>
+                                <button
+                                    type="submit"
+                                    disabled={isSavingSettings}
+                                    className="w-full py-5 bg-emerald-600 text-black font-black text-xs uppercase tracking-[0.3em] hover:bg-emerald-500 transition-all shadow-[0_0_30px_rgba(16,185,129,0.4)] hover:shadow-[0_0_50px_rgba(16,185,129,0.6)] relative overflow-hidden group"
+                                >
+                                    {isSavingSettings ? "CONFIGURANDO..." : "FINALIZAR CONFIGURAÇÃO"}
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
+                {/* MODAL RESET SENHA MANUAL */}
+                {showPassResetModal && selectedEmp && (
+                    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 backdrop-blur-md p-4 animate-fade-in">
+                        <div className="bg-gray-900 border border-emerald-500/30 w-full max-w-md shadow-2xl rounded-sm relative overflow-hidden">
+                            <div className="bg-emerald-500/10 border-b border-emerald-500/20 p-6 flex justify-between items-center">
+                                <div>
+                                    <h3 className="text-xl font-black text-white uppercase tracking-tighter italic">Redefinir Senha Manual</h3>
+                                    <p className="text-[9px] text-emerald-500/60 font-mono uppercase mt-1">Colaborador: {selectedEmp.name}</p>
+                                </div>
+                                <button
+                                    onClick={() => setShowPassResetModal(false)}
+                                    className="text-white/50 hover:text-white transition-colors p-2 text-2xl leading-none"
+                                >
+                                    &times;
+                                </button>
+                            </div>
+
+                            <form onSubmit={confirmManualPasswordReset} className="p-8 space-y-6">
+                                <div className="bg-yellow-500/10 border border-yellow-500/20 p-4 mb-4">
+                                    <p className="text-[9px] text-yellow-500 uppercase font-black tracking-widest leading-relaxed">
+                                        ⚠️ AVISO: Esta senha será salva como uma "chave de emergência". O colaborador poderá entrar usando esta nova senha imediatamente.
+                                    </p>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 pl-1">Nova Senha</label>
+                                        <input
+                                            type="password"
+                                            required
+                                            minLength={6}
+                                            className="w-full bg-white/5 border border-white/10 p-4 focus:border-emerald-500 outline-none text-white font-mono text-sm"
+                                            placeholder="******"
+                                            value={newPassForm.password}
+                                            onChange={e => setNewPassForm({ ...newPassForm, password: e.target.value })}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 pl-1">Confirmar Senha</label>
+                                        <input
+                                            type="password"
+                                            required
+                                            minLength={6}
+                                            className="w-full bg-white/5 border border-white/10 p-4 focus:border-emerald-500 outline-none text-white font-mono text-sm"
+                                            placeholder="******"
+                                            value={newPassForm.confirm}
+                                            onChange={e => setNewPassForm({ ...newPassForm, confirm: e.target.value })}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-4 pt-4">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassResetModal(false)}
+                                        className="flex-1 py-3 border border-white/10 text-gray-400 font-black text-[10px] uppercase tracking-widest hover:text-white transition-all"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isResettingPass}
+                                        className="flex-1 py-3 bg-emerald-600 text-black font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-500/20"
+                                    >
+                                        {isResettingPass ? 'SALVANDO...' : 'Confirmar Alteração'}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

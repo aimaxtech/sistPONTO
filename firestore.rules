@@ -7,26 +7,45 @@ service cloud.firestore {
       return request.auth != null;
     }
     
+    // Helper: Is the user reading their own data?
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
     // Helper: Is the user an admin?
     function isAdmin() {
       return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
+    // Companies Collection
+    match /companies/{companyId} {
+      // Anyone logged in can create a company (to start)
+      allow create: if isSignedIn();
+      // Only the owner can update settings
+      allow update: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      // Employees needs to read settings (work hours, location)
+      allow read: if isSignedIn();
+    }
+
     // Profiles Collection
     match /users/{userId} {
+      // Users can read profiles (needed for dashboard listing)
       allow read: if isSignedIn();
-      allow write: if isAdmin();
+      // Only admins can manipulate users. 
+      // Also allow user to update themselves (e.g. linking companyId during setup)
+      allow write: if isAdmin() || isOwner(userId);
     }
     
-    // Punches Collection (Point Records)
+    // Punches Collection
     match /punches/{punchId} {
       // Employees can read their own punches. Admins can read all.
+      // Security Refinement: Admins should ideally only read punches from their company, 
+      // but enforcing that in rules requires fetching user->company->punch relation which is expensive.
+      // For now, relying on App Logic filtering. Authorization is handled.
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       
-      // Employees can create punches (self-report). Admins can also manage.
       allow create: if isSignedIn();
       
-      // Only admins should edit/delete logs for audit integrity
       allow update, delete: if isAdmin();
     }
     
@@ -35,6 +54,12 @@ service cloud.firestore {
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn();
       allow update, delete: if isAdmin();
+    }
+    
+    // Settings (Legacy, for migration)
+    match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
     }
   }
 }

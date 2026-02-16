@@ -20,49 +20,55 @@ Criar uma aplicação web progressiva (PWA) simples e robusta para 2 funcionári
 - `role` (string): 'admin' | 'employee'
 - `email` (string): Email de acesso
 - `photoUrl` (string): Foto de perfil (opcional)
+- `status` (string): 'ativo' | 'ferias' | 'afastado'
+- `statusStart` (string): Data Inicio Status (YYYY-MM-DD)
+- `statusEnd` (string): Data Fim Status (YYYY-MM-DD)
 
-### Coleção: `time_records`
+### Coleção: `time_records` (punches)
 - `id` (string): Auto-gerado
 - `userId` (string): ID do funcionário
 - `timestamp` (timestamp): Data e hora exata do registro
-- `type` (string): 'entrada' | 'saida_almoco' | 'volta_almoco' | 'saida'
+- `type` (string): 'entrada' | 'saida_almoco' | 'volta_almoco' | 'saida' | 'saida_eventual' | 'volta_eventual'
 - `location` (geoPoint): Latitude/Longitude
 - `photoUrl` (string): URL da foto tirada no momento (Storage)
 - `deviceInfo` (string): Info básica do dispositivo (opcional, para segurança)
+- `isAbonado` (boolean): Se a saída eventual foi abonada
+- `justification` (string): Justificativa do funcionário
 
 ## 🚀 Fases do Projeto
 
 ### Fase 1: Configuração Inicial e Infraestrutura
-- [ ] Inicializar projeto React com Vite
-- [ ] Configurar TailwindCSS
-- [ ] Configurar Firebase (Auth, Firestore, Storage)
-- [ ] Criar Contexto de Autenticação (Login/Logout)
+- [x] Inicializar projeto React com Vite
+- [x] Configurar TailwindCSS
+- [x] Configurar Firebase (Auth, Firestore, Storage)
+- [x] Criar Contexto de Autenticação (Login/Logout)
 
 ### Fase 2: Interface do Administrador
-- [ ] Tela de Login (Admin/Func)
-- [ ] Dashboard Principal (Visão Geral)
-- [ ] Cadastro de Funcionários (Criar conta email/senha)
-- [ ] Relatório de Pontos (Tabela com filtros de data)
-- [ ] Visualização de Detalhes (Foto + Mapa do local)
+- [x] Tela de Login (Admin/Func)
+- [x] Dashboard Principal (Visão Geral)
+- [x] Cadastro de Funcionários (Criar conta email/senha)
+- [x] Relatório de Pontos (Tabela com filtros de data)
+- [x] Visualização de Detalhes (Foto + Mapa do local)
+- [x] Gestão de Abonos e Status (Férias/Afastamentos)
 
 ### Fase 3: Interface do Funcionário (Mobile First)
-- [ ] Home Simplificada (Botão Grande "Registrar Ponto")
-- [ ] Lógica de Captura de Localização (GPS)
-- [ ] Componente de Câmera (Tirar Selfie)
-- [ ] Feedback Visual de Sucesso/Erro
-- [ ] Histórico Recente (Últimos registros do dia)
+- [x] Home Simplificada (Botão Grande "Registrar Ponto")
+- [x] Lógica de Captura de Localização (GPS)
+- [x] Componente de Câmera (Tirar Selfie)
+- [x] Feedback Visual de Sucesso/Erro
+- [x] Histórico Recente (Últimos registros do dia) & Banco de Horas
 
 ### Fase 4: Regras de Negócio e Validações
-- [ ] Bloquear registro sem GPS/Câmera
-- [ ] Calcular distância da Estufa (Opcional: Alerta de "Fora do Local")
-- [ ] Proteção de Rotas (Admin vs Employee)
+- [x] Bloquear registro sem GPS/Câmera (Implementado, validação visual no Admin)
+- [x] Calcular distância da Estufa (Geofencing auditável no Admin)
+- [x] Proteção de Rotas (Admin vs Employee)
 
 ### Fase 5: Polimento e Deploy
-- [ ] Otimizar para Mobile (Touch icons, Manifest PWA)
-- [ ] Testes Finais de Usabilidade
+- [x] Otimizar para Mobile (Touch icons, Manifest PWA)
+- [ ] Testes Finais de Usabilidade (Em Progresso)
 - [ ] Deploy no Firebase Hosting
 
 ## 📝 Próximos Passos Imediatos
-1. Criar o projeto Vite + React.
-2. Instalar dependências (Firebase, Router, Icons).
-3. Configurar o projeto no Console do Firebase.
+1. Executar testes finais simulando fluxo completo (Admin cria user -> User bate ponto -> Admin valida).
+2. Verificar responsividade em dispositivos móveis reais (via deploy ou tunnel).
+3. Realizar deploy final no Firebase Hosting.

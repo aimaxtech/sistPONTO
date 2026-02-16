@@ -9,10 +9,13 @@ export const firebaseConfig = {
     measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
+// Configurações Globais de Trabalho
+export const WORK_HOURS_PER_DAY = 8;
+
 // Coordenadas da Estufa de Mudas (Exemplo - AJUSTAR COM LOCALIZAÇÃO REAL)
 export const GREENHOUSE_LOCATION = {
-    latitude: -23.550520,  // Substitua pela latitude real
-    longitude: -46.633308, // Substitua pela longitude real
+    latitude: -20.87340,  // Substitua pela latitude real
+    longitude: -48.81649, // Substitua pela longitude real
     radius: 100 // Raio em metros para considerar "dentro da estufa"
 };
 
@@ -21,13 +24,17 @@ export const PUNCH_TYPES = {
     ENTRADA: 'entrada',
     SAIDA_ALMOCO: 'saida_almoco',
     VOLTA_ALMOCO: 'volta_almoco',
-    SAIDA: 'saida'
+    SAIDA: 'saida',
+    SAIDA_EVENTUAL: 'saida_eventual',
+    VOLTA_EVENTUAL: 'volta_eventual'
 };
 
 // Labels amigáveis
 export const PUNCH_LABELS = {
     entrada: 'Entrada',
-    saida_almoco: 'Saída para Almoço',
-    volta_almoco: 'Volta do Almoço',
-    saida: 'Saída'
+    saida_almoco: 'Saída Almoço',
+    volta_almoco: 'Retorno Almoço',
+    saida: 'Saída Final',
+    saida_eventual: 'Saída Eventual',
+    volta_eventual: 'Retorno Eventual'
 };

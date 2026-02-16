@@ -370,10 +370,21 @@ const AdminDashboard = () => {
 
                 {/* Photo Preview Modal */}
                 {previewPhoto && (
-                    <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-4 backdrop-blur-md" onClick={() => setPreviewPhoto(null)}>
-                        <div className="relative max-w-2xl w-full">
-                            <img src={previewPhoto} className="w-full border-4 border-white shadow-2xl" alt="Preview facial" />
-                            <button className="absolute -top-10 right-0 text-white font-black text-xl">FECHAR &times;</button>
+                    <div className="fixed inset-0 bg-black/95 z-[60] flex items-center justify-center p-4 backdrop-blur-xl" onClick={() => setPreviewPhoto(null)}>
+                        <div className="relative max-w-2xl w-full animate-fade-in" onClick={e => e.stopPropagation()}>
+                            <div className="absolute top-0 left-0 w-full h-full border border-white/10 pointer-events-none"></div>
+                            <img src={previewPhoto} className="w-full shadow-[0_0_100px_rgba(0,0,0,0.5)] border-4 border-black" alt="Preview facial" />
+                            <div className="absolute top-4 right-4 flex gap-2">
+                                <button
+                                    onClick={() => setPreviewPhoto(null)}
+                                    className="bg-black/50 hover:bg-black text-white w-10 h-10 flex items-center justify-center font-black text-xl border border-white/20 transition-all active:scale-95"
+                                >
+                                    &times;
+                                </button>
+                            </div>
+                            <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-4 py-2 border border-white/5">
+                                <p className="text-[10px] font-mono text-emerald-500 font-black uppercase tracking-[0.2em]">Registro_Visual_Validado</p>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -394,9 +405,9 @@ const AdminDashboard = () => {
                                 <InstallButton />
                                 <button
                                     onClick={handleLogout}
-                                    className="btn-secondary"
+                                    className="px-6 py-2 bg-white/5 border border-white/10 text-white font-black text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-500 hover:text-black hover:border-emerald-500 transition-all active:scale-95 shadow-lg"
                                 >
-                                    Sair
+                                    LOGOUT_SYSTEM
                                 </button>
                             </div>
                         </div>

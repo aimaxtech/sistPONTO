@@ -72,9 +72,31 @@ export const AuthProvider = ({ children }) => {
         }
     };
 
+    // Função de bypass para quando o Admin altera a senha via Firestore (passwordOverride)
+    const setManualUser = async (userData) => {
+        setLoading(true);
+        setCurrentUser(userData);
+        setUserRole(userData.role);
+
+        if (userData.companyId) {
+            try {
+                const companyDoc = await getDoc(doc(db, 'companies', userData.companyId));
+                if (companyDoc.exists()) {
+                    setCurrentCompany({ id: companyDoc.id, ...companyDoc.data() });
+                }
+            } catch (error) {
+                console.error("Erro ao buscar empresa manual:", error);
+            }
+        }
+        setLoading(false);
+    };
+
     const logout = async () => {
         try {
             await signOut(auth);
+            setCurrentUser(null);
+            setUserRole(null);
+            setCurrentCompany(null);
         } catch (error) {
             throw error;
         }
@@ -84,7 +106,8 @@ export const AuthProvider = ({ children }) => {
         currentUser,
         userRole,
         currentCompany,
-        setCurrentCompany, // Expor setter para atualizar após criação
+        setCurrentCompany,
+        setManualUser,
         login,
         logout,
         loading

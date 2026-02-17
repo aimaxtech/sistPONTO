@@ -114,6 +114,34 @@ const AdminDashboard = () => {
         return true;
     };
 
+    // Helper: Formata CPF (000.000.000-00)
+    const formatCPF = (value) => {
+        return value
+            .replace(/\D/g, '')
+            .replace(/(\d{3})(\d)/, '$1.$2')
+            .replace(/(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+            .replace(/\.(\d{3})(\d)/, '.$1-$2')
+            .slice(0, 14);
+    };
+
+    // Helper: Valida CPF (Matemática Real)
+    const validateCPF = (cpf) => {
+        cpf = cpf.replace(/[^\d]+/g, '');
+        if (cpf === '' || cpf.length !== 11 || /^(\d)\1+$/.test(cpf)) return false;
+        let soma = 0;
+        let resto;
+        for (let i = 1; i <= 9; i++) soma = soma + parseInt(cpf.substring(i - 1, i)) * (11 - i);
+        resto = (soma * 10) % 11;
+        if ((resto === 10) || (resto === 11)) resto = 0;
+        if (resto !== parseInt(cpf.substring(9, 10))) return false;
+        soma = 0;
+        for (let i = 1; i <= 10; i++) soma = soma + parseInt(cpf.substring(i - 1, i)) * (12 - i);
+        resto = (soma * 10) % 11;
+        if ((resto === 10) || (resto === 11)) resto = 0;
+        if (resto !== parseInt(cpf.substring(10, 11))) return false;
+        return true;
+    };
+
     const handleSaveCompany = async (e) => {
         e.preventDefault();
 
@@ -179,7 +207,7 @@ const AdminDashboard = () => {
     const [stats, setStats] = useState({ present: 0, justifications: 0, loading: true });
     const [recentLogs, setRecentLogs] = useState([]);
     const [showRegisterModal, setShowRegisterModal] = useState(false);
-    const [newEmployee, setNewEmployee] = useState({ name: '', matricula: '', password: '', role: 'employee' });
+    const [newEmployee, setNewEmployee] = useState({ name: '', matricula: '', cpf: '', email: '', password: '', role: 'employee' });
     const [reportFilters, setReportFilters] = useState({
         start: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`,
         end: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`,
@@ -230,28 +258,41 @@ const AdminDashboard = () => {
 
     // Movemos fetchEmployees para fora para ser reutilizável
     const fetchEmployees = async () => {
-        if (!currentCompany?.id) return;
+        if (!currentCompany?.id) {
+            setEmployees([]);
+            return;
+        }
         try {
             console.log("🔍 Buscando funcionários para empresa:", currentCompany.id);
             const q = query(
                 collection(db, 'users'),
-                where('companyId', '==', currentCompany.id)
+                where('companyId', '==', currentCompany.id),
+                where('role', '==', 'employee')
             );
             const querySnapshot = await getDocs(q);
             const users = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-            // Ordenar na memória para evitar necessidade de índice composto no Firestore
+            // Ordenar na memória
             const sortedUsers = users.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-            // Filter only employees
-            const onlyEmployees = sortedUsers.filter(u => u.role === 'employee');
+            // Filter only active employees (não desativados)
+            const onlyEmployees = sortedUsers.filter(u => u.status !== 'desativado');
             console.log("✅ Funcionários encontrados:", onlyEmployees.length);
             setEmployees(onlyEmployees);
         } catch (error) {
             console.error("❌ Erro ao buscar funcionários:", error);
-            alert("Erro ao carregar lista de funcionários. Verifique o console ou índices do banco.");
+            setEmployees([]);
+            alert("Erro ao carregar lista de funcionários.");
         }
     };
+
+    // Filtro de busca local
+    const [searchTerm, setSearchTerm] = useState('');
+    const filteredEmployees = employees.filter(emp =>
+        emp.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        emp.matricula?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        emp.cpf?.includes(searchTerm)
+    );
 
     const handleResetPassword = (emp) => {
         setSelectedEmp(emp);
@@ -364,10 +405,15 @@ const AdminDashboard = () => {
                         loading: false
                     });
 
-                    // Fetch Recent Logs
-                    const recentQuery = query(collection(db, 'punches'), orderBy('timestamp', 'desc'), limit(5));
+                    // Fetch Recent Logs - FILTRADO POR COMPANY
+                    // Como punches não tem companyId, buscamos os últimos 50 e filtramos em memória
+                    const recentQuery = query(collection(db, 'punches'), orderBy('timestamp', 'desc'), limit(50));
                     const recentSnapshot = await getDocs(recentQuery);
-                    const logs = recentSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    const logs = recentSnapshot.docs
+                        .map(doc => ({ id: doc.id, ...doc.data() }))
+                        .filter(log => companyUserIds.has(log.userId))
+                        .slice(0, 5); // Pega apenas os 5 mais recentes da empresa
+
                     setRecentLogs(logs);
                 } else {
                     setStats(prev => ({ ...prev, loading: false }));
@@ -395,14 +441,22 @@ const AdminDashboard = () => {
                 allDocs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
                     .filter(p => p.date >= reportFilters.start && p.date <= reportFilters.end);
             } else {
-                // Se filtramos por clínica toda, pegamos por data (query simples em um só campo)
+                // Se filtramos por clínica toda, pegamos por data
                 q = query(
                     collection(db, 'punches'),
                     where('date', '>=', reportFilters.start),
                     where('date', '<=', reportFilters.end)
                 );
                 const snap = await getDocs(q);
-                allDocs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                // FILTRO DE SEGURANÇA: Garantir que só apareçam dados da empresa logada
+                // Precisamos da lista de IDs da empresa
+                const companyUserDocs = await getDocs(query(collection(db, 'users'), where('companyId', '==', currentCompany.id)));
+                const validIds = new Set(companyUserDocs.docs.map(d => d.id));
+
+                allDocs = snap.docs
+                    .map(doc => ({ id: doc.id, ...doc.data() }))
+                    .filter(p => validIds.has(p.userId));
             }
 
             // Ordenar por data (desc) e depois por timestamp (asc) em JavaScript
@@ -569,23 +623,62 @@ const AdminDashboard = () => {
 
         try {
             // 1. Verificação Rigorosa no Firestore (não apenas no estado local)
+            // Agora verificamos pelo CPF pois ele é o ID global de login
             const q = query(
                 collection(db, 'users'),
-                where('companyId', '==', currentCompany.id),
-                where('matricula', '==', newEmployee.matricula)
+                where('cpf', '==', newEmployee.cpf.replace(/\D/g, ''))
             );
             const querySnapshot = await getDocs(q);
 
             if (!querySnapshot.empty) {
-                alert(`⚠️ Erro: A matrícula ${newEmployee.matricula} já está cadastrada para outro colaborador nesta empresa.`);
+                const existingUser = querySnapshot.docs[0];
+                const existingData = existingUser.data();
+
+                if (existingData.status === 'desativado') {
+                    // Garantir que temos uma matrícula para exibir/usar, recalculando se necessário
+                    let matriculaParaReativar = newEmployee.matricula;
+                    if (!matriculaParaReativar || matriculaParaReativar === '0000') {
+                        const qCount = query(collection(db, 'users'), where('companyId', '==', currentCompany.id), where('role', '==', 'employee'));
+                        const snapCount = await getDocs(qCount);
+                        matriculaParaReativar = String(snapCount.docs.length + 1).padStart(4, '0');
+                    }
+
+                    if (window.confirm(`📋 O colaborador "${existingData.name}" (CPF ${newEmployee.cpf}) possui um perfil desativado.\n\nDeseja REATIVAR este perfil com a nova matrícula (${matriculaParaReativar})?`)) {
+                        await updateDoc(doc(db, 'users', existingUser.id), {
+                            name: newEmployee.name,
+                            matricula: matriculaParaReativar,
+                            passwordOverride: newEmployee.password,
+                            status: 'ativo',
+                            updatedAt: firestoreTimestamp()
+                        });
+                        alert('✅ Colaborador reativado com sucesso!');
+                        setShowRegisterModal(false);
+                        setNewEmployee({ name: '', matricula: '', cpf: '', email: '', password: '', role: 'employee' });
+                        fetchEmployees();
+                        setIsRegisteringEmp(false);
+                        return;
+                    } else {
+                        setIsRegisteringEmp(false);
+                        return;
+                    }
+                }
+
+                alert(`⚠️ Erro: O CPF ${newEmployee.cpf} já está vinculado a um colaborador ativo.`);
                 setIsRegisteringEmp(false);
                 return;
             }
 
+            // Validação de CPF antes de prosseguir
+            if (!validateCPF(newEmployee.cpf)) {
+                alert("⚠️ CPF Inválido! Verifique os números digitados.");
+                setIsRegisteringEmp(false);
+                return;
+            }
+
+            // Removidos imports dinâmicos redundantes que causavam erro de inicialização (TDZ)
             const { initializeApp, getApp, getApps } = await import('firebase/app');
             const { getAuth, createUserWithEmailAndPassword, signOut } = await import('firebase/auth');
             const { firebaseConfig } = await import('../config/firebase');
-            const { doc, setDoc } = await import('firebase/firestore');
 
             const secondaryAppName = 'secondaryApp';
             let secondaryApp;
@@ -599,17 +692,20 @@ const AdminDashboard = () => {
             const secondaryAuth = getAuth(secondaryApp);
 
             // Create User in Auth
-            const emailFake = `${currentCompany.loginCode}.${newEmployee.matricula}@empresa.ponto`;
+            const cpfClean = newEmployee.cpf.replace(/\D/g, '');
+            const emailFake = `${cpfClean}@sisponto.com`;
 
             try {
                 const userCredential = await createUserWithEmailAndPassword(secondaryAuth, emailFake, newEmployee.password);
                 const user = userCredential.user;
 
                 // Create Profile in Firestore
-                await setDoc(doc(db, 'users', userCredential.user.uid), {
-                    uid: userCredential.user.uid,
+                await setDoc(doc(db, 'users', user.uid), {
+                    uid: user.uid,
                     name: newEmployee.name,
                     matricula: newEmployee.matricula,
+                    cpf: cpfClean,
+                    personalEmail: newEmployee.email || '',
                     companyLoginCode: currentCompany.loginCode,
                     email: emailFake,
                     role: newEmployee.role,
@@ -621,19 +717,45 @@ const AdminDashboard = () => {
                 await signOut(secondaryAuth);
                 alert('✅ Funcionário cadastrado com sucesso!');
                 setShowRegisterModal(false);
-                setNewEmployee({ name: '', matricula: '', password: '', role: 'employee' });
-                fetchEmployees(); // Recarrega a lista real
+                setNewEmployee({ name: '', matricula: '', cpf: '', email: '', password: '', role: 'employee' });
+                fetchEmployees();
 
             } catch (authError) {
+                console.error("Erro ao criar/autenticar:", authError);
+
                 if (authError.code === 'auth/email-already-in-use') {
-                    alert(`⚠️ Erro Crítico: O identificador para esta matrícula (${newEmployee.matricula}) já existe no servidor de autenticação. Tente usar uma matrícula diferente.`);
+                    if (window.confirm("⚠️ Este CPF já tem um acesso criado no servidor, mas o perfil no banco de dados não foi encontrado.\n\nDeseja restaurar o perfil deste colaborador agora?")) {
+                        try {
+                            const tempId = `restored_${cpfClean}`;
+                            await setDoc(doc(db, 'users', tempId), {
+                                uid: tempId,
+                                name: newEmployee.name,
+                                matricula: newEmployee.matricula,
+                                cpf: cpfClean,
+                                personalEmail: newEmployee.email || '',
+                                companyLoginCode: currentCompany.loginCode,
+                                email: emailFake,
+                                role: newEmployee.role,
+                                companyId: currentCompany.id,
+                                createdAt: firestoreTimestamp(),
+                                status: 'ativo',
+                                isRestored: true
+                            });
+                            alert('✅ Perfil restaurado com sucesso!');
+                            setShowRegisterModal(false);
+                            setNewEmployee({ name: '', matricula: '', cpf: '', email: '', password: '', role: 'employee' });
+                            fetchEmployees();
+                            return;
+                        } catch (e) {
+                            alert("Erro ao restaurar: " + e.message);
+                        }
+                    }
                 } else {
-                    throw authError;
+                    alert('Erro ao criar conta: ' + authError.message);
                 }
             }
-
         } catch (error) {
-            console.error("Erro ao cadastrar:", error);
+            console.error("Erro geral no cadastro:", error);
             alert(`❌ Erro no sistema: ${error.message}`);
         } finally {
             setIsRegisteringEmp(false);
@@ -710,11 +832,40 @@ const AdminDashboard = () => {
             });
             alert('Status do colaborador atualizado! 🔄');
             setShowStatusModal(false);
-            // Refresh employee list
-            const empSnapshot = await getDocs(collection(db, 'users'));
-            setEmployees(empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+            // Refresh employee list (USANDO A FUNÇÃO FILTRADA)
+            fetchEmployees();
         } catch (error) {
             alert('Erro ao atualizar status: ' + error.message);
+        }
+    };
+
+    const handleDeleteEmployee = async (emp) => {
+        // Opção inicial: Desativar ou Outros
+        const choice = window.confirm(`⚠️ O que deseja fazer com "${emp.name}"?\n\n[OK] Apenas DESATIVAR (Mantém histórico e permite reativação fácil).\n\n[CANCELAR] Para opções de EXCLUSÃO definitiva do banco.`);
+
+        if (choice) {
+            // Fluxo de Desativação (Soft Delete)
+            try {
+                await updateDoc(doc(db, 'users', emp.id), {
+                    status: 'desativado',
+                    updatedAt: firestoreTimestamp()
+                });
+                alert('✅ Colaborador desativado. Ele não consegue mais logar, mas os registros foram mantidos.');
+                fetchEmployees();
+            } catch (error) {
+                alert(`❌ Erro ao desativar: ${error.message}`);
+            }
+        } else {
+            // Fluxo de Exclusão Definitiva (Hard Delete de Firestore)
+            if (window.confirm(`🔥 PERIGO: Deseja EXCLUIR DEFINITIVAMENTE o perfil de "${emp.name}" de nosso banco de dados?\n\nIsso limpará os dados do colaborador. Se ele tiver registros de ponto, estes ficarão sem nome. Esta ação NÃO PODE SER DESFEITA.`)) {
+                try {
+                    await deleteDoc(doc(db, 'users', emp.id));
+                    alert('🗑️ Perfil apagado do banco com sucesso.');
+                    fetchEmployees();
+                } catch (error) {
+                    alert(`❌ Erro ao excluir: ${error.message}`);
+                }
+            }
         }
     };
 
@@ -767,14 +918,26 @@ const AdminDashboard = () => {
                                         />
                                     </div>
                                     <div className="space-y-2">
-                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">Código Corporativo (Vinculado)</label>
+                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">E-mail (Opcional)</label>
+                                        <input
+                                            type="email"
+                                            placeholder="EMAIL@EXEMPLO.COM"
+                                            className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xs text-white uppercase"
+                                            value={newEmployee.email}
+                                            onChange={e => setNewEmployee({ ...newEmployee, email: e.target.value })}
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="block text-[10px] font-black text-emerald-500/50 uppercase tracking-[0.2em] pl-1">CPF do Colaborador (ID Único)</label>
                                         <input
                                             type="text"
-                                            readOnly
-                                            value={currentCompany?.loginCode || ''}
-                                            className="w-full bg-white/5 border border-white/10 p-3 outline-none font-mono text-xs text-emerald-500/50 uppercase cursor-not-allowed"
+                                            required
+                                            placeholder="000.000.000-00"
+                                            className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xl text-white tracking-[0.2em]"
+                                            value={newEmployee.cpf}
+                                            onChange={e => setNewEmployee({ ...newEmployee, cpf: formatCPF(e.target.value) })}
                                         />
-                                        <p className="text-[8px] font-mono text-gray-600 uppercase mt-1">Este código será exigido no login deste colaborador.</p>
+                                        <p className="text-[8px] font-mono text-emerald-500/60 uppercase mt-1">O CPF será usado como login em qualquer empresa.</p>
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-2">
@@ -783,9 +946,9 @@ const AdminDashboard = () => {
                                                 type="text"
                                                 required
                                                 placeholder="0000"
-                                                className="w-full bg-white/5 border border-white/10 p-3 focus:border-emerald-500 outline-none font-mono text-xs text-white uppercase tracking-widest"
+                                                className="w-full bg-white/5 border border-white/10 p-3 outline-none font-mono text-xs text-emerald-500/50 uppercase cursor-not-allowed"
+                                                readOnly
                                                 value={newEmployee.matricula}
-                                                onChange={e => setNewEmployee({ ...newEmployee, matricula: e.target.value })}
                                             />
                                         </div>
                                         <div className="space-y-2">
@@ -1244,13 +1407,50 @@ const AdminDashboard = () => {
                                     <div className="relative flex-1 md:w-80">
                                         <input
                                             type="text"
-                                            placeholder="BUSCAR POR NOME OU MATRÍCULA..."
+                                            placeholder="BUSCAR POR NOME, CPF OU MATRÍCULA..."
+                                            value={searchTerm}
+                                            onChange={(e) => setSearchTerm(e.target.value)}
                                             className="w-full bg-white/5 border border-white/10 p-3 pl-10 focus:border-emerald-500 focus:bg-white/10 outline-none font-mono text-[10px] uppercase tracking-widest text-white transition-all shadow-inner"
                                         />
                                         <svg className="w-4 h-4 absolute left-3 top-3.5 text-emerald-500/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                                     </div>
                                     <button
-                                        onClick={() => setShowRegisterModal(true)}
+                                        onClick={async () => {
+                                            if (!currentCompany?.id) {
+                                                alert("Erro: Empresa não identificada.");
+                                                return;
+                                            }
+
+                                            try {
+                                                // 1. Buscar apenas colaboradores para contar a matrícula sequencial correta
+                                                const q = query(
+                                                    collection(db, 'users'),
+                                                    where('companyId', '==', currentCompany.id),
+                                                    where('role', '==', 'employee')
+                                                );
+                                                const snap = await getDocs(q);
+
+                                                // Próxima matrícula = Total de colaboradores + 1
+                                                const nextMatricula = String(snap.docs.length + 1).padStart(4, '0');
+                                                console.log("📍 Gerando matrícula:", nextMatricula);
+
+                                                setNewEmployee({
+                                                    name: '',
+                                                    matricula: nextMatricula,
+                                                    cpf: '',
+                                                    email: '',
+                                                    password: '',
+                                                    role: 'employee'
+                                                });
+
+                                                // Pequeno delay para garantir que o estado do React atualizou antes do modal abrir
+                                                setTimeout(() => setShowRegisterModal(true), 50);
+
+                                            } catch (err) {
+                                                console.error("Erro ao preparar cadastro:", err);
+                                                alert("Erro ao gerar matrícula automática: " + err.message);
+                                            }
+                                        }}
                                         className="bg-emerald-500 text-black px-6 py-3 font-black text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-400 transition-all active:scale-95 whitespace-nowrap shadow-[0_0_20px_rgba(16,185,129,0.3)]"
                                     >
                                         + ADICIONAR
@@ -1265,14 +1465,14 @@ const AdminDashboard = () => {
                                         <thead>
                                             <tr className="bg-emerald-500/10 text-emerald-500 border-b border-white/5">
                                                 <th className="px-6 py-4 font-black">Colaborador</th>
-                                                <th className="px-6 py-4 font-black">Matrícula</th>
-                                                <th className="px-6 py-4 font-black">Acesso</th>
+                                                <th className="px-6 py-4 font-black text-center">CPF / Login</th>
+                                                <th className="px-6 py-4 font-black text-center">Matrícula ID</th>
                                                 <th className="px-6 py-4 font-black">Status</th>
                                                 <th className="px-6 py-4 text-right font-black">Ações_Auditoria</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-white/5 text-gray-300">
-                                            {employees.map((emp) => (
+                                            {filteredEmployees.map((emp) => (
                                                 <tr key={emp.id} className="hover:bg-white/5 transition-colors group">
                                                     <td className="px-6 py-4 whitespace-nowrap">
                                                         <div className="flex items-center">
@@ -1285,14 +1485,13 @@ const AdminDashboard = () => {
                                                             </div>
                                                         </div>
                                                     </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap focus:text-emerald-500">
-                                                        <span className="text-xs text-emerald-500/70 font-mono tracking-widest">{emp.matricula}</span>
-                                                    </td>
-                                                    <td className="px-6 py-4 whitespace-nowrap">
-                                                        <span className={`px-2 py-0.5 text-[9px] font-black uppercase tracking-widest border transition-colors ${emp.role === 'admin' ? 'border-emerald-500/30 text-emerald-500 bg-emerald-500/5' : 'border-white/10 text-gray-600'
-                                                            }`}>
-                                                            {emp.role === 'admin' ? 'Administrador' : 'Operacional'}
+                                                    <td className="px-6 py-4 whitespace-nowrap text-center">
+                                                        <span className="text-[10px] text-emerald-500/70 font-mono tracking-widest bg-emerald-500/5 px-2 py-1 rounded border border-emerald-500/10">
+                                                            {emp.cpf ? formatCPF(emp.cpf) : 'SEM CPF'}
                                                         </span>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-center">
+                                                        <span className="text-xs text-gray-400 font-mono tracking-widest">{emp.matricula || '0000'}</span>
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap">
                                                         <div className="flex items-center gap-2">
@@ -1339,8 +1538,9 @@ const AdminDashboard = () => {
                                                                 🔑
                                                             </button>
                                                             <button
-                                                                title="Desativar"
-                                                                className="p-2 border border-white/10 hover:border-red-500/50 hover:bg-red-500/5 text-red-500/50 transition-all"
+                                                                onClick={() => handleDeleteEmployee(emp)}
+                                                                title="Remover Colaborador"
+                                                                className="p-2 border border-white/10 hover:border-red-500/50 hover:bg-red-500/5 text-red-500/50 transition-all active:scale-95"
                                                             >
                                                                 🚫
                                                             </button>

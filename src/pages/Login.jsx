@@ -25,7 +25,7 @@ const Login = () => {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const { login } = useAuth();
+    const { login, setManualUser } = useAuth();
     const navigate = useNavigate();
 
     const handleSubmit = async (e) => {
@@ -61,20 +61,24 @@ const Login = () => {
                 navigate('/admin');
 
             } else {
-                // FLUXO DE LOGIN (Ajustado para Código da Empresa)
+                // FLUXO DE LOGIN (Ajustado para CPF ou e-mail)
                 let emailFinal = matricula;
 
-                // Se não for um email (ou seja, for matrícula), gera o email fake único
-                if (!matricula.includes('@')) {
+                // Verificar se é um CPF (11 dígitos ou formato de CPF)
+                const isCPF = matricula.replace(/\D/g, '').length === 11 && !matricula.includes('@');
+
+                if (isCPF) {
+                    const cpfClean = matricula.replace(/\D/g, '');
+                    emailFinal = `${cpfClean}@sisponto.com`;
+                } else if (!matricula.includes('@')) {
+                    // Legado: suporte para matricula antiga com código de empresa
                     if (!companyCode && matricula !== '1001') {
-                        throw new Error("Código da Empresa é obrigatório para funcionários.");
+                        throw new Error("Código da Empresa é obrigatório para matrículas legadas.");
                     }
 
-                    // Caso especial para o Admin Global 1001 (caso ele não queira usar email)
                     if (matricula === '1001') {
                         emailFinal = `1001@estufa.sistema`;
                     } else {
-                        // PADRÃO: codigo.matricula@empresa.ponto
                         emailFinal = `${companyCode}.${matricula}@empresa.ponto`;
                     }
                 }
@@ -99,13 +103,16 @@ const Login = () => {
         } catch (err) {
             console.error('Erro Auth:', err);
 
-            // TENTATIVA DE LOGIN COM SENHA MANUAL (OVERRIDE)
-            if (!isRegistering && (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found')) {
+            // TENTATIVA DE LOGIN COM SENHA MANUAL (OVERRIDE) - ESSENCIAL PARA ADMIN ALTERAR SENHA DE FUNC
+            if (!isRegistering) {
                 try {
                     setLoading(true);
-                    // Buscar se existe este usuário com um passwordOverride
                     let emailInterno = matricula;
-                    if (!matricula.includes('@')) {
+                    const isCPF = matricula.replace(/\D/g, '').length === 11 && !matricula.includes('@');
+
+                    if (isCPF) {
+                        emailInterno = `${matricula.replace(/\D/g, '')}@sisponto.com`;
+                    } else if (!matricula.includes('@')) {
                         emailInterno = matricula === '1001' ? `1001@estufa.sistema` : `${companyCode}.${matricula}@empresa.ponto`;
                     }
 
@@ -113,13 +120,23 @@ const Login = () => {
                     const snap = await getDocs(q);
 
                     if (!snap.empty) {
-                        const userData = snap.docs[0].data();
+                        const userDoc = snap.docs[0];
+                        const userData = userDoc.data();
+
+                        // Se a senha digitada for igual ao override, "forçamos" a entrada com os dados do Firestore
                         if (userData.passwordOverride === password) {
-                            // SE A SENHA BATE COM O OVERRIDE, MAS O AUTH REJEITOU
-                            // Avisar que o Admin alterou a senha mas o sistema precisa de um refresh sincronizado
-                            setError('Senha alterada pelo Admin. Use a senha anterior ou solicite novo cadastro de acesso.');
-                            // Nota: Sem backend, não podemos forçar o login se o Firebase Auth não conhece a senha nova.
-                            return;
+                            console.log("✅ Login via Override autorizado!");
+
+                            // Estabilizar sessão manual para que os dashboards funcionem
+                            await setManualUser({ id: userDoc.id, ...userData });
+
+                            // Em um PWA sem backend de Admin, usamos o estado do Firestore como verdade
+                            if (userData.role === 'admin') {
+                                navigate('/admin');
+                            } else {
+                                navigate('/employee');
+                            }
+                            return; // Interrompe o fluxo de erro
                         }
                     }
                 } catch (e) {
@@ -241,29 +258,33 @@ const Login = () => {
                         ) : (
                             <>
                                 <div>
-                                    <label htmlFor="login-id" className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer hover:text-emerald-500 transition-colors">Identificação (Email ou ID)</label>
+                                    <label htmlFor="login-id" className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer hover:text-emerald-500 transition-colors">
+                                        {matricula.replace(/\D/g, '').length === 11 ? 'CPF Identificado' : 'E-mail ou CPF'}
+                                    </label>
                                     <input
                                         id="login-id"
                                         type="text"
                                         required
                                         value={matricula}
                                         onChange={(e) => setMatricula(e.target.value)}
-                                        className="w-full bg-white/10 border-2 border-white/10 p-4 focus:border-emerald-500 focus:bg-white/20 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-600"
-                                        placeholder="EX: admin@email.com"
+                                        className={`w-full bg-white/10 border-2 p-4 focus:border-emerald-500 focus:bg-white/20 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-600 ${matricula.replace(/\D/g, '').length === 11 ? 'border-emerald-500/50' : 'border-white/10'}`}
+                                        placeholder="000.000.000-00"
                                     />
                                 </div>
-                                <div className="animate-fade-in">
-                                    <label htmlFor="company-code" className="block text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer">Código da Empresa</label>
-                                    <input
-                                        id="company-code"
-                                        type="text"
-                                        required
-                                        value={companyCode}
-                                        onChange={(e) => setCompanyCode(e.target.value)}
-                                        className="w-full bg-emerald-500/10 border-2 border-emerald-500/30 p-4 focus:border-emerald-500 focus:bg-emerald-500/20 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-emerald-900/50"
-                                        placeholder="CÓDIGO CORPORATIVO"
-                                    />
-                                </div>
+                                {matricula.replace(/\D/g, '').length !== 11 && !matricula.includes('@') && matricula !== '1001' && (
+                                    <div className="animate-fade-in">
+                                        <label htmlFor="company-code" className="block text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer">Código da Empresa</label>
+                                        <input
+                                            id="company-code"
+                                            type="text"
+                                            required
+                                            value={companyCode}
+                                            onChange={(e) => setCompanyCode(e.target.value)}
+                                            className="w-full bg-emerald-500/10 border-2 border-emerald-500/30 p-4 focus:border-emerald-500 focus:bg-emerald-500/20 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-emerald-900/50"
+                                            placeholder="CÓDIGO CORPORATIVO"
+                                        />
+                                    </div>
+                                )}
                                 <div>
                                     <label htmlFor="password" className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer hover:text-emerald-500 transition-colors">Senha de Acesso</label>
                                     <div className="relative group/pass">

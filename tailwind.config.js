@@ -8,14 +8,15 @@ export default {
         extend: {
             colors: {
                 primary: {
-                    50: '#f0fdf4',
+                    50: 'rgb(var(--color-primary-50) / <alpha-value>)',
+                    500: 'rgb(var(--color-primary-500) / <alpha-value>)',
+                    600: 'rgb(var(--color-primary-600) / <alpha-value>)',
+                    700: 'rgb(var(--color-primary-700) / <alpha-value>)',
+                    // Fallbacks
                     100: '#dcfce7',
                     200: '#bbf7d0',
                     300: '#86efac',
                     400: '#4ade80',
-                    500: '#10b981',
-                    600: '#059669',
-                    700: '#047857',
                     800: '#065f46',
                     900: '#064e3b',
                 },

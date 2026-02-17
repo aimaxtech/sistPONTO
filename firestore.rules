@@ -2,61 +2,64 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Helper: Is the user logged in?
+    // Identifica se o usuário está autenticado
     function isSignedIn() {
       return request.auth != null;
     }
     
-    // Helper: Is the user reading their own data?
+    // Verifica se o usuário é o dono do próprio documento
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    // Helper: Is the user an admin?
+    // Verifica se o usuário tem cargo de administrador
     function isAdmin() {
       return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
+    
+    // Pega os dados do usuário atual para validar a empresa (Multi-tenancy)
+    function currentUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
 
-    // Companies Collection
+    // Empresas
     match /companies/{companyId} {
-      // Anyone logged in can create a company (to start)
+      // Criação permitida para novos admins no setup
       allow create: if isSignedIn();
-      // Only the owner can update settings
+      // Leitura permitida apenas para quem pertence à empresa ou ao dono
+      allow read: if isSignedIn() && (currentUserData().companyId == companyId || resource.data.ownerId == request.auth.uid);
+      // Alteração apenas pelo dono
       allow update: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      // Employees needs to read settings (work hours, location)
-      allow read: if isSignedIn();
     }
 
-    // Profiles Collection
+    // Perfis de Usuário
     match /users/{userId} {
-      // Users can read profiles (needed for dashboard listing)
-      allow read: if isSignedIn();
-      // Only admins can manipulate users. 
-      // Also allow user to update themselves (e.g. linking companyId during setup)
-      allow write: if isAdmin() || isOwner(userId);
+      // Usuário pode ler o próprio perfil. Admin pode ler todos da MESMA empresa.
+      allow read: if isSignedIn() && (isOwner(userId) || (isAdmin() && currentUserData().companyId == resource.data.companyId));
+      // Admin pode criar/editar funcionários da sua empresa. Usuário pode editar a si mesmo (ex: trocar senha).
+      allow write: if isOwner(userId) || (isAdmin() && (request.resource.data.companyId == currentUserData().companyId || resource.data.companyId == currentUserData().companyId));
     }
     
-    // Punches Collection
+    // Registros de Ponto (Punches)
     match /punches/{punchId} {
-      // Employees can read their own punches. Admins can read all.
-      // Security Refinement: Admins should ideally only read punches from their company, 
-      // but enforcing that in rules requires fetching user->company->punch relation which is expensive.
-      // For now, relying on App Logic filtering. Authorization is handled.
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      // Leitura: Próprio funcionário OU Admin da mesma empresa
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || (isAdmin() && resource.data.companyId == currentUserData().companyId));
       
-      allow create: if isSignedIn();
+      // Criação: Validar se o usuário está batendo ponto para SI MESMO
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       
-      allow update, delete: if isAdmin();
+      // Admin pode gerenciar pontos da sua empresa
+      allow update, delete: if isAdmin() && resource.data.companyId == currentUserData().companyId;
     }
     
-    // Justifications Collection
+    // Justificativas
     match /justifications/{justId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn();
-      allow update, delete: if isAdmin();
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || (isAdmin() && resource.data.companyId == currentUserData().companyId));
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin() && resource.data.companyId == currentUserData().companyId;
     }
     
-    // Settings (Legacy, for migration)
+    // Configurações Legadas / Globais
     match /settings/{docId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { doc, setDoc, getDoc, serverTimestamp, query, collection, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp, query, collection, where, getDocs, limit } from 'firebase/firestore';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth, db } from '../services/firebase';
 import InstallButton from '../components/InstallButton';
@@ -24,9 +24,32 @@ const Login = () => {
     const [rememberMe, setRememberMe] = useState(false);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [fetchedCompany, setFetchedCompany] = useState(null);
 
     const { login, setManualUser } = useAuth();
     const navigate = useNavigate();
+
+    // Busca dinâmica de empresa por código
+    useEffect(() => {
+        const lookup = async () => {
+            if (companyCode.length >= 5) {
+                try {
+                    const q = query(collection(db, 'companies'), where('loginCode', '==', companyCode), limit(1));
+                    const snap = await getDocs(q);
+                    if (!snap.empty) {
+                        setFetchedCompany(snap.docs[0].data());
+                    } else {
+                        setFetchedCompany(null);
+                    }
+                } catch (e) {
+                    console.error("Erro busca empresa:", e);
+                }
+            } else {
+                setFetchedCompany(null);
+            }
+        };
+        lookup();
+    }, [companyCode]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -155,25 +178,34 @@ const Login = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4 font-sans text-gray-100 selection:bg-emerald-500/30">
+        <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4 font-sans text-gray-100 selection:bg-primary-500/30">
             {/* Background Decoration */}
             <div className="fixed inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-emerald-900/20 blur-[120px] rounded-full"></div>
-                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-emerald-900/10 blur-[120px] rounded-full"></div>
+                <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary-900/20 blur-[120px] rounded-full"></div>
+                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-primary-900/10 blur-[120px] rounded-full"></div>
             </div>
 
             {/* Main Container */}
             <div className="bg-black/40 backdrop-blur-xl w-full max-w-md border-2 border-white/5 relative z-10 p-8 shadow-2xl transition-all">
                 {/* Header Context */}
-                <div className="mb-8 text-center">
-                    <div className="inline-block px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black uppercase tracking-[0.3em] mb-4">
-                        {isRegistering ? 'Nova_Organização' : 'Acesso_Sistema_v2.0'}
+                <div className="mb-8 text-center animate-fade-in" key={fetchedCompany?.name || 'default'}>
+                    <div className="flex justify-center mb-6">
+                        {fetchedCompany?.logoUrl ? (
+                            <div className="h-16 w-auto p-2 bg-white/5 border border-white/10 rounded-lg">
+                                <img src={fetchedCompany.logoUrl} alt="Logo" className="h-full object-contain" />
+                            </div>
+                        ) : (
+                            <div className="inline-block px-3 py-1 bg-primary-500/10 border border-primary-500/20 text-primary-500 text-[10px] font-black uppercase tracking-[0.3em]">
+                                {isRegistering ? 'Nova_Organização' : 'Acesso_Sistema_v2.0'}
+                            </div>
+                        )}
                     </div>
+
                     <h1 className="text-3xl font-black text-white tracking-tighter uppercase italic leading-none">
-                        Sistema de <span className="text-emerald-500">Ponto</span>
+                        Ponto <span className="text-primary-500">{fetchedCompany?.name || 'Sistema'}</span>
                     </h1>
                     <p className="text-gray-400 text-xs font-mono mt-3 tracking-widest uppercase">
-                        {isRegistering ? 'Crie sua conta administrativa' : 'Identificação Obrigatória'}
+                        {isRegistering ? 'Crie sua conta administrativa' : (fetchedCompany ? `Bem-vindo à ${fetchedCompany.name}` : 'Identificação Obrigatória')}
                     </p>
                 </div>
 
@@ -190,14 +222,14 @@ const Login = () => {
                         <button
                             type="button"
                             onClick={() => { setIsRegistering(false); setError(''); }}
-                            className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest transition-all rounded-md ${!isRegistering ? 'bg-emerald-500 text-black shadow-lg' : 'text-gray-500 hover:text-white'}`}
+                            className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest transition-all rounded-md ${!isRegistering ? 'bg-primary-500 text-black shadow-lg' : 'text-gray-500 hover:text-white'}`}
                         >
                             Entrar
                         </button>
                         <button
                             type="button"
                             onClick={() => { setIsRegistering(true); setError(''); }}
-                            className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest transition-all rounded-md ${isRegistering ? 'bg-emerald-500 text-black shadow-lg' : 'text-gray-500 hover:text-white'}`}
+                            className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest transition-all rounded-md ${isRegistering ? 'bg-primary-500 text-black shadow-lg' : 'text-gray-500 hover:text-white'}`}
                         >
                             Criar Conta
                         </button>
@@ -213,7 +245,7 @@ const Login = () => {
                                         required
                                         value={regName}
                                         onChange={(e) => setRegName(e.target.value)}
-                                        className="w-full bg-white/5 border-2 border-white/10 p-4 focus:border-emerald-500 focus:bg-white/10 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-700"
+                                        className="w-full bg-white/5 border-2 border-white/10 p-4 focus:border-primary-500 focus:bg-white/10 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-700"
                                         placeholder="SEU NOME COMPLETO"
                                     />
                                 </div>
@@ -224,7 +256,7 @@ const Login = () => {
                                         required
                                         value={regEmail}
                                         onChange={(e) => setRegEmail(e.target.value)}
-                                        className="w-full bg-white/5 border-2 border-white/10 p-4 focus:border-emerald-500 focus:bg-white/10 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-700"
+                                        className="w-full bg-white/5 border-2 border-white/10 p-4 focus:border-primary-500 focus:bg-white/10 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-700"
                                         placeholder="ADMIN@EMPRESA.COM"
                                     />
                                 </div>
@@ -236,18 +268,18 @@ const Login = () => {
                                         minLength={6}
                                         value={regPassword}
                                         onChange={(e) => setRegPassword(e.target.value)}
-                                        className="w-full bg-white/5 border-2 border-white/10 p-4 focus:border-emerald-500 focus:bg-white/10 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-700"
+                                        className="w-full bg-white/5 border-2 border-white/10 p-4 focus:border-primary-500 focus:bg-white/10 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-700"
                                         placeholder="******"
                                     />
                                 </div>
-                                <div className="bg-emerald-500/10 p-4 border border-emerald-500/30 rounded-lg">
-                                    <label className="block text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-2 pl-1">Chave de Licença / Voucher</label>
+                                <div className="bg-primary-500/10 p-4 border border-primary-500/30 rounded-lg">
+                                    <label className="block text-[10px] font-black text-primary-500 uppercase tracking-[0.2em] mb-2 pl-1">Chave de Licença / Voucher</label>
                                     <input
                                         type="text"
                                         required
                                         value={activationKey}
                                         onChange={(e) => setActivationKey(e.target.value)}
-                                        className="w-full bg-black/50 border-2 border-emerald-500/50 p-4 focus:border-emerald-500 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-600"
+                                        className="w-full bg-black/50 border-2 border-primary-500/50 p-4 focus:border-primary-500 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-600"
                                         placeholder="INSIRA SUA CHAVE DE ATIVAÇÃO"
                                     />
                                     <p className="text-[8px] text-gray-400 mt-2 uppercase tracking-tight">
@@ -258,7 +290,7 @@ const Login = () => {
                         ) : (
                             <>
                                 <div>
-                                    <label htmlFor="login-id" className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer hover:text-emerald-500 transition-colors">
+                                    <label htmlFor="login-id" className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer hover:text-primary-500 transition-colors">
                                         {matricula.replace(/\D/g, '').length === 11 ? 'CPF Identificado' : 'E-mail ou CPF'}
                                     </label>
                                     <input
@@ -267,26 +299,26 @@ const Login = () => {
                                         required
                                         value={matricula}
                                         onChange={(e) => setMatricula(e.target.value)}
-                                        className={`w-full bg-white/10 border-2 p-4 focus:border-emerald-500 focus:bg-white/20 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-600 ${matricula.replace(/\D/g, '').length === 11 ? 'border-emerald-500/50' : 'border-white/10'}`}
+                                        className={`w-full bg-white/10 border-2 p-4 focus:border-primary-500 focus:bg-white/20 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-600 ${matricula.replace(/\D/g, '').length === 11 ? 'border-primary-500/50' : 'border-white/10'}`}
                                         placeholder="000.000.000-00"
                                     />
                                 </div>
                                 {matricula.replace(/\D/g, '').length !== 11 && !matricula.includes('@') && matricula !== '1001' && (
                                     <div className="animate-fade-in">
-                                        <label htmlFor="company-code" className="block text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer">Código da Empresa</label>
+                                        <label htmlFor="company-code" className="block text-[10px] font-black text-primary-500 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer">Código da Empresa</label>
                                         <input
                                             id="company-code"
                                             type="text"
                                             required
                                             value={companyCode}
                                             onChange={(e) => setCompanyCode(e.target.value)}
-                                            className="w-full bg-emerald-500/10 border-2 border-emerald-500/30 p-4 focus:border-emerald-500 focus:bg-emerald-500/20 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-emerald-900/50"
+                                            className="w-full bg-primary-500/10 border-2 border-primary-500/30 p-4 focus:border-primary-500 focus:bg-primary-500/20 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-primary-900/50"
                                             placeholder="CÓDIGO CORPORATIVO"
                                         />
                                     </div>
                                 )}
                                 <div>
-                                    <label htmlFor="password" className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer hover:text-emerald-500 transition-colors">Senha de Acesso</label>
+                                    <label htmlFor="password" className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2 pl-1 cursor-pointer hover:text-primary-500 transition-colors">Senha de Acesso</label>
                                     <div className="relative group/pass">
                                         <input
                                             id="password"
@@ -294,14 +326,14 @@ const Login = () => {
                                             required
                                             value={password}
                                             onChange={(e) => setPassword(e.target.value)}
-                                            className={`w-full bg-white/10 border-2 p-4 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-600 pr-12 ${password.length >= 6 ? 'border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.1)]' : 'border-white/10'
-                                                } focus:border-emerald-500 focus:bg-white/20`}
+                                            className={`w-full bg-white/10 border-2 p-4 outline-none text-white font-mono text-sm tracking-widest transition-all placeholder:text-gray-600 pr-12 ${password.length >= 6 ? 'border-primary-500/50 shadow-[0_0_15px_rgba(16,185,129,0.1)]' : 'border-white/10'
+                                                } focus:border-primary-500 focus:bg-white/20`}
                                             placeholder="******"
                                         />
                                         <button
                                             type="button"
                                             onClick={() => setShowPassword(!showPassword)}
-                                            className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-emerald-500 transition-colors p-1"
+                                            className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-primary-500 transition-colors p-1"
                                             title={showPassword ? "Esconder" : "Mostrar"}
                                         >
                                             {showPassword ? (
@@ -314,7 +346,7 @@ const Login = () => {
                                             <p className="text-[7px] text-amber-500 mt-1 uppercase font-black tracking-widest animate-pulse">Min. 6 caracteres</p>
                                         )}
                                         {password.length >= 6 && (
-                                            <div className="absolute right-12 top-1/2 -translate-y-1/2 text-emerald-500 animate-fade-in">
+                                            <div className="absolute right-12 top-1/2 -translate-y-1/2 text-primary-500 animate-fade-in">
                                                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
                                             </div>
                                         )}
@@ -333,19 +365,19 @@ const Login = () => {
                                     onChange={(e) => setRememberMe(e.target.checked)}
                                     className="hidden"
                                 />
-                                <div className={`w-4 h-4 border-2 flex items-center justify-center transition-all ${rememberMe ? 'bg-emerald-500 border-emerald-500' : 'border-white/10'}`}>
+                                <div className={`w-4 h-4 border-2 flex items-center justify-center transition-all ${rememberMe ? 'bg-primary-500 border-primary-500' : 'border-white/10'}`}>
                                     {rememberMe && <svg className="w-3 h-3 text-black" fill="currentColor" viewBox="0 0 20 20"><path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" /></svg>}
                                 </div>
                                 <span className="ml-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest group-hover:text-gray-300 transition-colors">Manter Conexão</span>
                             </label>
-                            <button type="button" className="text-[10px] font-bold text-emerald-500/50 uppercase tracking-widest hover:text-emerald-500 transition-colors">Esqueci Senha</button>
+                            <button type="button" className="text-[10px] font-bold text-primary-500/50 uppercase tracking-widest hover:text-primary-500 transition-colors">Esqueci Senha</button>
                         </div>
                     )}
 
                     <button
                         type="submit"
                         disabled={loading}
-                        className={`w-full py-4 text-[11px] font-black uppercase tracking-[0.3em] transition-all relative overflow-hidden group ${loading ? 'bg-emerald-900/50 text-emerald-500/50' : 'bg-emerald-600 text-black hover:bg-emerald-500 hover:scale-[1.02] active:scale-[0.98]'
+                        className={`w-full py-4 text-[11px] font-black uppercase tracking-[0.3em] transition-all relative overflow-hidden group ${loading ? 'bg-primary-900/50 text-primary-500/50' : 'bg-primary-600 text-black hover:bg-primary-500 hover:scale-[1.02] active:scale-[0.98]'
                             }`}
                     >
                         {loading ? 'PROCESSANDO...' : (isRegistering ? 'CRIAR CONTA SAAS' : 'INICIAR SESSÃO')}

@@ -40,7 +40,7 @@ const InstallButton = () => {
     return (
         <button
             onClick={handleInstallClick}
-            className="flex items-center gap-2 bg-emerald-600/10 border border-emerald-500/30 text-emerald-500 px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-black transition-all"
+            className="flex items-center gap-2 bg-primary-600/10 border border-primary-500/30 text-primary-500 px-4 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-primary-600 hover:text-black transition-all"
         >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />

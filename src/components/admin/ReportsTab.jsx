@@ -1,9 +1,8 @@
 import React from 'react';
-import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
+import { generatePDFReport, generateEspelhoPontoPDF } from '../../utils/pdfGenerator';
 
 const ReportsTab = ({
-    reportFilters, setReportFilters, employees, handleGenerateReport,
+    currentCompany, reportFilters, setReportFilters, employees, handleGenerateReport,
     isGeneratingReport, reportData, geofence, calculateDistance,
     setPreviewPhoto, setAuditLog, setEditData, setShowEditModal,
     setShowDeleteConfirm, handleCertificateUpload, handleApproveJustification,
@@ -11,73 +10,18 @@ const ReportsTab = ({
 }) => {
 
     const exportToPDF = () => {
-        const doc = new jsPDF();
-        const tableColumn = ["Data", "Funcionário", "Tipo", "Horário", "Status/Local"];
-        const tableRows = [];
-
-        reportData.forEach(log => {
-            const rowData = [
-                log.date,
-                log.userName,
-                log.type.toUpperCase(),
-                log.timestamp?.toDate ? log.timestamp.toDate().toLocaleTimeString('pt-BR') : '--:--',
-                log.isViolation ? "FORA DE PERÍMETRO" : "NORMAL"
-            ];
-            tableRows.push(rowData);
-        });
-
-        doc.text("Relatório de Ponto - SistPONTO", 14, 15);
-        doc.autoTable(tableColumn, tableRows, { startY: 20 });
-        doc.save(`relatorio_ponto_${reportFilters.start}_${reportFilters.end}.pdf`);
+        generatePDFReport(reportData, reportFilters, currentCompany);
     };
 
     const generateEspelhoPonto = () => {
         if (reportFilters.employeeId === 'all') return alert("Selecione um funcionário específico para gerar o espelho de ponto.");
-
         const emp = employees.find(e => e.id === reportFilters.employeeId);
-        const doc = new jsPDF();
+        if (!emp) return alert("Funcionário não encontrado.");
 
-        doc.setFontSize(18);
-        doc.text("ESPELHO DE PONTO MENSAL", 105, 20, { align: 'center' });
-
-        doc.setFontSize(10);
-        doc.text(`EMPRESA: ${emp.companyName || 'SISTPONTO CORP'}`, 14, 35);
-        doc.text(`COLABORADOR: ${emp.name}`, 14, 40);
-        doc.text(`CPF: ${emp.cpf}`, 14, 45);
-        doc.text(`PERÍODO: ${reportFilters.start} até ${reportFilters.end}`, 14, 50);
-
-        const tableColumn = ["Data", "Entrada", "Saída Almoço", "Volta Almoço", "Saída", "Carga Total"];
-        const rowsByDate = reportData.reduce((acc, log) => {
-            acc[log.date] = acc[log.date] || [];
-            acc[log.date].push(log);
-            return acc;
-        }, {});
-
-        const tableRows = Object.keys(rowsByDate).sort().map(date => {
-            const dayLogs = rowsByDate[date].sort((a, b) => (a.timestamp?.toDate() || 0) - (b.timestamp?.toDate() || 0));
-            const entries = dayLogs.filter(l => l.type === 'entrada').map(l => l.timestamp?.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-            const exits = dayLogs.filter(l => l.type === 'saida' || l.type === 'saida_almoco').map(l => l.timestamp?.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-
-            return [
-                date,
-                entries[0] || '--:--',
-                exits[0] || '--:--',
-                entries[1] || '--:--',
-                exits[1] || '--:--',
-                "---" // Carga seria calculada aqui se quiséssemos mostrar por linha
-            ];
-        });
-
-        doc.autoTable(tableColumn, tableRows, { startY: 60 });
-
-        const finalY = doc.lastAutoTable.finalY + 30;
-        doc.line(14, finalY, 90, finalY);
-        doc.text("Assinatura do Colaborador", 14, finalY + 5);
-
-        doc.line(120, finalY, 196, finalY);
-        doc.text("Assinatura do Responsável", 120, finalY + 5);
-
-        doc.save(`espelho_ponto_${emp.name}_${reportFilters.start}.pdf`);
+        generateEspelhoPontoPDF(reportData, emp, {
+            startDate: reportFilters.start,
+            endDate: reportFilters.end
+        }, currentCompany);
     };
 
     return (
@@ -149,15 +93,22 @@ const ReportsTab = ({
                                         </td>
                                         <td className="px-6 py-5 text-center">
                                             <span className={`px-2 py-0.5 text-[8px] font-black uppercase rounded-xs ${log.type === 'entrada' ? 'bg-primary-500/10 text-primary-500' :
-                                                    log.type === 'justificativa' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-red-500/10 text-red-500'
+                                                log.type === 'justificativa' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-red-500/10 text-red-500'
                                                 }`}>
                                                 {log.type.replace('_', ' ')}
                                             </span>
                                         </td>
                                         <td className="px-6 py-5 text-center">
-                                            <span className="text-sm font-black text-white italic tracking-tighter">
-                                                {log.timestamp?.toDate ? log.timestamp.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--'}
-                                            </span>
+                                            <div className="flex flex-col items-center">
+                                                <span className="text-sm font-black text-white italic tracking-tighter">
+                                                    {log.timestamp?.toDate ? log.timestamp.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--'}
+                                                </span>
+                                                {log.lastEdit && (
+                                                    <span className="text-[7px] text-blue-400 font-bold uppercase tracking-tighter mt-1 flex items-center gap-1" title={`Editado por admin: ${log.lastEdit.reason}`}>
+                                                        ✏️ Editado
+                                                    </span>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="px-6 py-5">
                                             <div className="flex flex-col items-center gap-2">
@@ -172,7 +123,7 @@ const ReportsTab = ({
                                                 </div>
                                                 {log.status && (
                                                     <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-xs ${log.status === 'aprovado' ? 'bg-green-500 text-black' :
-                                                            log.status === 'rejeitado' ? 'bg-red-500 text-white' : 'bg-yellow-500 text-black'
+                                                        log.status === 'rejeitado' ? 'bg-red-500 text-white' : 'bg-yellow-500 text-black'
                                                         }`}>
                                                         {log.status}
                                                     </span>

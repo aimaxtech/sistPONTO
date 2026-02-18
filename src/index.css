@@ -13,6 +13,14 @@
   body {
     @apply bg-black text-white;
   }
+
+  select option {
+    @apply bg-[#151515] text-white;
+  }
+
+  select:focus {
+    @apply border-primary-500;
+  }
 }
 
 .no-scrollbar::-webkit-scrollbar {

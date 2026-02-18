@@ -49,37 +49,47 @@ const OverviewTab = ({ stats, weeklyStats, setActiveTab, setShowRegisterModal, r
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Weekly Presence Chart */}
-                <div className="lg:col-span-2 bg-white/2 border border-white/5 p-8 rounded-3xl">
-                    <div className="flex justify-between items-center mb-10">
-                        <div>
-                            <h3 className="text-[10px] font-black text-primary-500 uppercase tracking-[0.3em] mb-2">Performance_Semanal</h3>
-                            <p className="text-lg font-black text-white italic tracking-tight uppercase">Engajamento de Presença</p>
-                        </div>
-                        <div className="flex items-center gap-4">
-                            <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 bg-primary-500 rounded-full"></div>
-                                <span className="text-[8px] font-mono text-gray-500 uppercase">Check-ins</span>
-                            </div>
-                        </div>
+                {/* Atividade em Tempo Real (Substituindo Gráfico) */}
+                <div className="lg:col-span-2 bg-white/2 border border-white/5 rounded-3xl overflow-hidden flex flex-col">
+                    <div className="p-8 border-b border-white/5">
+                        <h3 className="text-[10px] font-black text-primary-500 uppercase tracking-[0.3em] mb-2">Monitoramento_Live</h3>
+                        <p className="text-xl font-black text-white italic tracking-tight uppercase">Registros de Hoje</p>
                     </div>
 
-                    <div className="h-64 flex items-end justify-between gap-2 px-2">
-                        {weeklyStats.map((day, idx) => (
-                            <div key={idx} className="flex-1 flex flex-col items-center group">
-                                <div className="relative w-full flex items-end justify-center mb-4 h-full">
-                                    <div
-                                        className="w-full max-w-[40px] bg-primary-500/10 border-t border-x border-primary-500/20 group-hover:bg-primary-500/30 transition-all rounded-t-sm relative"
-                                        style={{ height: `${(day.count / (employees.length || 1)) * 100}%`, minHeight: '4px' }}
-                                    >
-                                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-primary-500 text-black text-[8px] font-black px-1.5 py-0.5 rounded-xs">
-                                            {day.count}
+                    <div className="flex-1 overflow-y-auto no-scrollbar max-h-[400px]">
+                        {recentLogs.length > 0 ? (
+                            <div className="divide-y divide-white/5">
+                                {recentLogs.map((log) => (
+                                    <div key={log.id} className="p-6 hover:bg-white/2 transition-colors flex items-center justify-between group">
+                                        <div className="flex items-center gap-4">
+                                            <div className={`w-2 h-2 rounded-full ${log.type === 'entrada' ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' :
+                                                    log.type === 'saida' ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]' :
+                                                        'bg-primary-500 shadow-[0_0_10px_rgba(var(--primary-rgb),0.5)]'
+                                                }`} />
+                                            <div>
+                                                <p className="text-xs font-black text-white uppercase tracking-tight group-hover:text-primary-500 transition-colors">
+                                                    {log.userName}
+                                                </p>
+                                                <p className="text-[9px] font-mono text-gray-500 uppercase">
+                                                    Registrou {log.type.replace('_', ' ')} • ID_{log.userId?.slice(-4)}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-lg font-black text-white italic tracking-tighter">
+                                                {log.timestamp?.toDate ? log.timestamp.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--'}
+                                            </p>
+                                            <p className="text-[7px] font-black text-gray-600 uppercase tracking-widest">Sincronizado_OK</p>
                                         </div>
                                     </div>
-                                </div>
-                                <span className="text-[9px] font-mono text-gray-500 group-hover:text-primary-500 transition-colors uppercase">{day.date}</span>
+                                ))}
                             </div>
-                        ))}
+                        ) : (
+                            <div className="h-64 flex flex-col items-center justify-center text-center p-10">
+                                <span className="text-4xl mb-4 grayscale opacity-20">📡</span>
+                                <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Aguardando_Atividade_Nuvem</p>
+                            </div>
+                        )}
                     </div>
                 </div>
 

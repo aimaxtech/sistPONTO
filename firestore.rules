@@ -40,23 +40,22 @@ service cloud.firestore {
       allow write: if isOwner(userId) || (isAdmin() && (request.resource.data.companyId == currentUserData().companyId || resource.data.companyId == currentUserData().companyId));
     }
     
-    // Registros de Ponto (Punches)
-    match /punches/{punchId} {
+    // Auditoria e Registros de Ponto (Logs)
+    match /logs/{logId} {
       // Leitura: Próprio funcionário OU Admin da mesma empresa
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || (isAdmin() && resource.data.companyId == currentUserData().companyId));
       
-      // Criação: Validar se o usuário está batendo ponto para SI MESMO
+      // Criação: Validar se o usuário está criando para SI MESMO
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       
-      // Admin pode gerenciar pontos da sua empresa
+      // Admin pode gerenciar logs da sua empresa (para correções e abonos)
       allow update, delete: if isAdmin() && resource.data.companyId == currentUserData().companyId;
     }
     
-    // Justificativas
-    match /justifications/{justId} {
+    // Coleção Legada (Punches) - Mantida apenas para compatibilidade de leitura antiga
+    match /punches/{punchId} {
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || (isAdmin() && resource.data.companyId == currentUserData().companyId));
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAdmin() && resource.data.companyId == currentUserData().companyId;
+      allow write: if isAdmin();
     }
     
     // Configurações Legadas / Globais

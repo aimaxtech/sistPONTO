@@ -10,7 +10,8 @@ const EmployeesTab = ({
     setStatusData,
     setShowStatusModal,
     handleResetPassword,
-    handleDeleteEmployee
+    handleDeleteEmployee,
+    onAdoptEmployee
 }) => {
     return (
         <div className="space-y-6 animate-fade-in">
@@ -29,6 +30,14 @@ const EmployeesTab = ({
                         />
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30">🔍</span>
                     </div>
+                    {searchTerm.length >= 11 && (
+                        <button
+                            onClick={() => onAdoptEmployee(searchTerm)}
+                            className="bg-blue-600 text-white px-4 py-3 font-black text-[10px] uppercase tracking-widest hover:bg-blue-500 transition-all flex items-center gap-2 shadow-lg"
+                        >
+                            <span>🔗</span> SINCRONIZAR_CPF
+                        </button>
+                    )}
                     <button
                         onClick={onAddEmployee}
                         className="bg-primary-500 text-black px-6 py-3 font-black text-[10px] uppercase tracking-widest hover:bg-primary-400 transition-all flex items-center gap-2 shadow-lg shadow-primary-500/20"
@@ -84,8 +93,10 @@ const EmployeesTab = ({
                                     </td>
                                     <td className="px-6 py-4">
                                         <div className="flex items-center gap-2">
-                                            <span className="text-[10px] font-black text-white bg-white/5 px-2 py-1 border border-white/10">± 00h 00m</span>
-                                            <span className="text-[7px] text-gray-600 opacity-50">STABLE</span>
+                                            <span className={`text-[10px] font-black px-2 py-1 border ${emp.balanceStr?.startsWith('-') ? 'text-red-500 bg-red-500/10 border-red-500/20' : 'text-primary-500 bg-primary-500/10 border-primary-500/20'}`}>
+                                                {emp.balanceStr || '00h 00m'}
+                                            </span>
+                                            <span className="text-[7px] text-gray-600 opacity-50">SYNC</span>
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-right">
@@ -145,7 +156,9 @@ const EmployeesTab = ({
                                 </div>
                                 <div>
                                     <p className="text-[8px] text-gray-600 uppercase font-black mb-1">Banco_Horas</p>
-                                    <p className="text-[10px] text-primary-500 font-bold">± 00h 00m</p>
+                                    <p className={`text-[10px] font-bold ${emp.balanceStr?.startsWith('-') ? 'text-red-500' : 'text-primary-500'}`}>
+                                        {emp.balanceStr || '00h 00m'}
+                                    </p>
                                 </div>
                             </div>
 

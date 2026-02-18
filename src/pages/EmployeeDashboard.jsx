@@ -3,8 +3,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import PunchButton from '../components/PunchButton';
 import { db } from '../services/firebase';
-import { collection, query, where, getDocs, addDoc, serverTimestamp as firestoreTimestamp, orderBy } from 'firebase/firestore';
+import { collection, query, where, addDoc, serverTimestamp as firestoreTimestamp, orderBy, onSnapshot, getDocs } from 'firebase/firestore';
 import InstallButton from '../components/InstallButton';
+import { getTodayStr, calculateWorkedMinutes, calculateDailyBalance, formatMinutes } from '../utils/timeUtils';
 
 const EmployeeDashboard = () => {
     const { currentUser, currentCompany, logout } = useAuth();
@@ -24,62 +25,82 @@ const EmployeeDashboard = () => {
     const [justificationData, setJustificationData] = useState({ type: 'Atestado Médico', date: '', obs: '', file: null });
     const [isSendingJustification, setIsSendingJustification] = useState(false);
 
-    const fetchTodayPunches = async () => {
-        if (!currentUser) return;
-        try {
-            const today = new Date().toISOString().split('T')[0];
-            const q = query(collection(db, 'punches'), where('userId', '==', currentUser.uid), where('date', '==', today));
-            const snap = await getDocs(q);
-            const data = snap.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data(),
-                time: doc.data().timestamp?.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) || '--:--'
-            })).sort((a, b) => (a.timestamp?.toDate() || 0) - (b.timestamp?.toDate() || 0));
-            setTodayPunches(data);
-        } catch (error) { console.error(error); }
-    };
-
-    const fetchTimeBank = async () => {
-        if (!currentUser) return;
-        try {
-            const { calculateWorkedMinutes, calculateDailyBalance } = await import('../utils/timeUtils');
-            const now = new Date();
-            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-            const q = query(collection(db, 'logs'), where('userId', '==', currentUser.uid), where('date', '>=', startOfMonth));
-            const snap = await getDocs(q);
-            const allLogs = snap.docs.map(d => d.data());
-
-            const logsByDay = allLogs.reduce((acc, log) => { acc[log.date] = acc[log.date] || []; acc[log.date].push(log); return acc; }, {});
-            let totalBalance = 0;
-            let workedToday = 0;
-            const todayStr = now.toISOString().split('T')[0];
-
-            Object.keys(logsByDay).forEach(dateStr => {
-                const dayMinutes = calculateWorkedMinutes(logsByDay[dateStr]);
-                if (dateStr === todayStr) workedToday = dayMinutes;
-
-                totalBalance += calculateDailyBalance(logsByDay[dateStr], dayMinutes, currentCompany?.workHours || 8);
-            });
-            setTimeBank({ balance: totalBalance, workedHours: workedToday / 60, loading: false });
-        } catch (error) { console.error(error); }
-    };
-
-    const fetchJustifications = async () => {
-        if (!currentUser) return;
-        try {
-            const q = query(collection(db, 'logs'), where('userId', '==', currentUser.uid), where('type', '==', 'justificativa'), orderBy('timestamp', 'desc'));
-            const snap = await getDocs(q);
-            setJustificationsList(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        } catch (error) { console.error(error); }
-    };
-
     useEffect(() => {
-        fetchTodayPunches();
-        fetchTimeBank();
-        fetchJustifications();
-        const timer = setInterval(fetchTimeBank, 60000);
-        return () => clearInterval(timer);
-    }, [currentUser, currentCompany]);
+        if (!currentUser || !currentCompany) return;
+
+        // Ouvinte em Tempo Real Total (Simplificado para evitar erro de índice)
+        // Buscamos todos os logs do usuário e filtramos localmente
+        const qLogs = query(
+            collection(db, 'logs'),
+            where('userId', '==', currentUser.uid)
+        );
+
+        const unsub = onSnapshot(qLogs, (snap) => {
+            try {
+                const allLogs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                // Filtros Locais (Ignora necessidade de índices compostos)
+                const todayStr = new Date().toISOString().split('T')[0];
+                const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+
+                // 1. Logs do Mês Atual (para Banco de Horas)
+                const monthLogs = allLogs.filter(l => l.date >= startOfMonth);
+
+                // 2. Batidas de Hoje
+                const todayLogs = monthLogs.filter(l => l.date === todayStr && l.type !== 'justificativa')
+                    .sort((a, b) => {
+                        const tA = a.timestamp?.seconds || 0;
+                        const tB = b.timestamp?.seconds || 0;
+                        return tA - tB;
+                    });
+
+                setTodayPunches(todayLogs.map(l => ({
+                    ...l,
+                    time: l.timestamp?.toDate ? l.timestamp.toDate().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : (l.time || '--:--')
+                })));
+
+                // 3. Justificativas (Filtradas localmente)
+                const justs = allLogs.filter(l => l.type === 'justificativa')
+                    .sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+                setJustificationsList(justs);
+
+                // 4. Calcular Banco de Horas e Trabalhado Hoje
+                const logsByDay = monthLogs.reduce((acc, log) => { acc[log.date] = acc[log.date] || []; acc[log.date].push(log); return acc; }, {});
+
+                let totalMinBalance = 0;
+                let workedTodayMin = calculateWorkedMinutes(todayLogs);
+
+                // Ajuste para cronômetro em tempo real
+                if (todayLogs.length % 2 !== 0) {
+                    const lastPunch = todayLogs[todayLogs.length - 1];
+                    const lastTime = lastPunch.timestamp?.toDate ? lastPunch.timestamp.toDate() : new Date();
+                    const diffMin = Math.floor((new Date() - lastTime) / (1000 * 60));
+                    if (diffMin > 0) workedTodayMin += diffMin;
+                }
+
+                Object.keys(logsByDay).forEach(dateStr => {
+                    if (dateStr === todayStr) return;
+                    const dayMinutes = calculateWorkedMinutes(logsByDay[dateStr]);
+                    totalMinBalance += calculateDailyBalance(logsByDay[dateStr], dayMinutes, currentCompany?.workHours || 8);
+                });
+
+                setTimeBank({
+                    balance: totalMinBalance / 60,
+                    workedHours: workedTodayMin / 60,
+                    loading: false
+                });
+            } catch (err) {
+                console.error("❌ Erro ao calcular jornada:", err);
+                setTimeBank(prev => ({ ...prev, loading: false }));
+            }
+        });
+
+        const timer = setInterval(() => {
+            setTimeBank(prev => ({ ...prev }));
+        }, 30000);
+
+        return () => { unsub(); clearInterval(timer); };
+    }, [currentUser, currentCompany?.id]);
 
     useEffect(() => {
         if (view === 'history') {
@@ -95,8 +116,8 @@ const EmployeeDashboard = () => {
                         return { id: doc.id, ...p, date: p.date, rawDate: ts, time: ts.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) };
                     });
 
-                    const punchesOnly = data.filter(d => d.type !== 'justificativa');
-                    const grouped = punchesOnly.reduce((acc, p) => { acc[p.date] = acc[p.date] || []; acc[p.date].push(p); return acc; }, {});
+                    const logsOnly = data.filter(d => d.type !== 'justificativa');
+                    const grouped = logsOnly.reduce((acc, p) => { acc[p.date] = acc[p.date] || []; acc[p.date].push(p); return acc; }, {});
                     const totals = {};
                     Object.keys(grouped).forEach(date => {
                         totals[date] = formatMinutes(calculateWorkedMinutes(grouped[date])).replace('+', '');
@@ -186,7 +207,10 @@ const EmployeeDashboard = () => {
                         </div>
 
                         <div className="bg-black/40 border border-white/5 p-6 rounded-2xl shadow-2xl">
-                            <PunchButton onPunchSuccess={() => { fetchTodayPunches(); fetchTimeBank(); }} />
+                            <PunchButton
+                                onPunchSuccess={() => { /* Ouvinte onSnapshot cuida do resto */ }}
+                                lastPunch={todayPunches[todayPunches.length - 1]}
+                            />
                         </div>
 
                         <div className="grid grid-cols-2 gap-4">
@@ -214,7 +238,7 @@ const EmployeeDashboard = () => {
                                                 <p className="text-[8px] font-mono text-gray-600 uppercase italic">{j.date}</p>
                                             </div>
                                             <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-xs ${j.status === 'aprovado' ? 'bg-green-500 text-black' :
-                                                    j.status === 'rejeitado' ? 'bg-red-500 text-white' : 'bg-yellow-500 text-black'
+                                                j.status === 'rejeitado' ? 'bg-red-500 text-white' : 'bg-yellow-500 text-black'
                                                 }`}>
                                                 {j.status}
                                             </span>
@@ -272,7 +296,7 @@ const EmployeeDashboard = () => {
                                                 <div key={item.id} className="flex justify-between items-center">
                                                     <div className="flex items-center gap-3">
                                                         <div className={`w-1.5 h-1.5 rounded-full ${item.type === 'entrada' ? 'bg-primary-500' :
-                                                                item.type === 'justificativa' ? 'bg-yellow-500' : 'bg-red-500'
+                                                            item.type === 'justificativa' ? 'bg-yellow-500' : 'bg-red-500'
                                                             }`}></div>
                                                         <p className="text-[10px] font-black text-gray-300 uppercase">{item.type.replace('_', ' ')}</p>
                                                     </div>

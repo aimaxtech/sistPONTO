@@ -3,6 +3,30 @@
  */
 
 /**
+ * Retorna a data de hoje no fuso horário de Brasília (UTC-3) formatada como YYYY-MM-DD
+ */
+export const getTodayStr = () => {
+    return new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).format(new Date()).split('/').reverse().join('-');
+};
+
+export const getBrTimestampMinutes = () => {
+    const now = new Date();
+    const brTime = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    }).format(now);
+    const [h, m] = brTime.split(':');
+    return (parseInt(h) * 60) + parseInt(m);
+};
+
+/**
  * Calcula o total de minutos trabalhados em um dia baseado nos logs
  * @param {Array} dayLogs - Lista de logs de um único dia
  * @returns {number} - Total de minutos trabalhados

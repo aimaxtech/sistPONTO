@@ -46,5 +46,18 @@ export const simulateSystemData = async (companyId, employeeId) => {
         });
     }
 
-    alert("Simulação Concluída! Verifique o Dashboard agora.");
+    // 3. Justificativa Pendente para Teste de Aprovação
+    await addDoc(logsRef, {
+        userId: employeeId,
+        userName: "Funcionário Teste",
+        companyId: companyId,
+        type: 'justificativa',
+        date: today,
+        timestamp: serverTimestamp(),
+        justification: "Consulta médica de rotina - Simulação",
+        justificationType: "Atestado Médico",
+        status: 'pendente'
+    });
+
+    alert("Simulação Concluída! Verifique o Dashboard (Estatísticas e Relatórios) agora.");
 };
